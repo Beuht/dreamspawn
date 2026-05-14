@@ -375,7 +375,31 @@ class Ring:
         surf.blit(s, (cx - r - 10, cy - r - 10))
 
 
+# ---------------------------------------------------------------------------
+# Sprites animés pour les beams (chargés une fois au démarrage)
+# ---------------------------------------------------------------------------
+_BEAM_FRAMES: list = []   # rempli par _load_beam_sprites()
+
+def _load_beam_sprites():
+    """Charge les 5 frames beam_f1..f5.png depuis assets/images/.
+    Appelé une fois dans Game.__init__. Si absent → fallback rectangles."""
+    global _BEAM_FRAMES
+    _BEAM_FRAMES = []
+    base = getattr(__import__("sys"), "_MEIPASS",
+                   os.path.dirname(os.path.abspath(__file__)))
+    for i in range(1, 6):
+        p = os.path.join(base, "assets", "images", f"beam_f{i}.png")
+        try:
+            _BEAM_FRAMES.append(pygame.image.load(p).convert_alpha())
+        except Exception:
+            _BEAM_FRAMES = []   # si l'un manque → on désactive tout
+            return
+
+
 class Beam:
+    # Durée de chaque frame dans l'animation (en frames de jeu)
+    FRAME_DUR = 4
+
     def __init__(self, rect, dim, life=24, color=None, dmg=1, hits_any_dim=False):
         self.rect = rect
         self.dim = dim
@@ -385,24 +409,56 @@ class Beam:
         self.dmg = dmg
         self.hits_any_dim = hits_any_dim
         self.dead = False
+        self._anim_t = 0   # compteur d'animation
 
     def update(self):
         self.life -= 1
+        self._anim_t += 1
         if self.life <= 0: self.dead = True
 
     def draw(self, surf, cam):
         t = max(0.0, self.life / self.max_life)
-        alpha = int(220 * t)
-        edge_a = int(180 * t)
-        s = pygame.Surface(self.rect.size, pygame.SRCALPHA)
-        s.fill((*self.color, alpha))
-        if self.rect.w >= self.rect.h:
-            pygame.draw.rect(s, (*Pal.BEAM_EDGE, edge_a), (0, 0, self.rect.w, 4))
-            pygame.draw.rect(s, (*Pal.BEAM_EDGE, edge_a), (0, self.rect.h - 4, self.rect.w, 4))
+        sx = self.rect.x - cam[0]
+        sy = self.rect.y - cam[1]
+        vertical = self.rect.h > self.rect.w
+
+        if _BEAM_FRAMES:
+            # ── Rendu sprite animé ──────────────────────────────────────────
+            # Choisit la frame selon l'avancement de l'animation
+            # (bloqué sur la dernière frame une fois atteinte)
+            fi = min(len(_BEAM_FRAMES) - 1, self._anim_t // self.FRAME_DUR)
+            raw = _BEAM_FRAMES[fi]
+
+            if vertical:
+                # Étire la frame pour couvrir toute la hauteur du beam
+                scaled = pygame.transform.scale(raw, (self.rect.w, self.rect.h))
+            else:
+                # Rotation 90° pour les beams horizontaux
+                rotated = pygame.transform.rotate(raw, -90)
+                scaled = pygame.transform.scale(rotated, (self.rect.w, self.rect.h))
+
+            # Teinte couleur via BLEND_RGB_MULT
+            tint = pygame.Surface(scaled.get_size())
+            tint.fill(self.color)
+            scaled.blit(tint, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
+
+            # Fondu sur la durée de vie
+            scaled.set_alpha(int(230 * t))
+            surf.blit(scaled, (sx, sy))
+
         else:
-            pygame.draw.rect(s, (*Pal.BEAM_EDGE, edge_a), (0, 0, 4, self.rect.h))
-            pygame.draw.rect(s, (*Pal.BEAM_EDGE, edge_a), (self.rect.w - 4, 0, 4, self.rect.h))
-        surf.blit(s, (self.rect.x - cam[0], self.rect.y - cam[1]))
+            # ── Fallback rectangles (si sprites absents) ────────────────────
+            alpha = int(220 * t)
+            edge_a = int(180 * t)
+            s = pygame.Surface(self.rect.size, pygame.SRCALPHA)
+            s.fill((*self.color, alpha))
+            if self.rect.w >= self.rect.h:
+                pygame.draw.rect(s, (*Pal.BEAM_EDGE, edge_a), (0, 0, self.rect.w, 4))
+                pygame.draw.rect(s, (*Pal.BEAM_EDGE, edge_a), (0, self.rect.h - 4, self.rect.w, 4))
+            else:
+                pygame.draw.rect(s, (*Pal.BEAM_EDGE, edge_a), (0, 0, 4, self.rect.h))
+                pygame.draw.rect(s, (*Pal.BEAM_EDGE, edge_a), (self.rect.w - 4, 0, 4, self.rect.h))
+            surf.blit(s, (sx, sy))
 
 
 # ---------------------------------------------------------------------------
@@ -2026,6 +2082,7 @@ class Game:
             self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         pygame.display.set_caption("Dreamspawn — Prototype v3")
         self.clock = pygame.time.Clock()
+        _load_beam_sprites()   # charge les frames animées beam_f1..f5.png
 
         self.font_big = pygame.font.SysFont("georgia", 64, bold=True)
         self.font_med = pygame.font.SysFont("georgia", 28, bold=True)
