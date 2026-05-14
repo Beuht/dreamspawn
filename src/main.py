@@ -974,7 +974,7 @@ class MoonBoss:
 
         # Chargement du sprite de la Lune (moon_sprite.png dans le même dossier)
         _base_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-        _sprite_path = os.path.join(_base_dir, "moon_sprite.png")
+        _sprite_path = os.path.join(_base_dir, "assets", "images", "moon_sprite.png")
         try:
             _raw = pygame.image.load(_sprite_path).convert_alpha()
             # Pré-scale à la taille du boss (radius*2 x radius*2)
