@@ -377,9 +377,17 @@ class Ring:
 
 
 class Beam:
-    # Gradient rouge ardent : bord foncé → rouge → blanc au centre (tous les lasers)
+    # Gradient mauve/violet : bord foncé → violet → blanc au centre (défaut)
     _LAYERS = [
-        # (fraction_largeur, couleur)
+        (1.00, (25,  5,  55)),   # violet très foncé — bords extérieurs
+        (0.72, (80, 20, 150)),   # violet foncé
+        (0.48, (150, 60, 230)),  # mauve normal
+        (0.28, (210, 150, 255)), # mauve clair
+        (0.12, (238, 220, 255)), # quasi blanc mauve
+        (0.04, (250, 245, 255)), # blanc pur au cœur
+    ]
+    # Gradient rouge ardent : utilisé uniquement pour les lasers de la phase 5
+    _LAYERS_RED = [
         (1.00, (40,  2,   5)),   # rouge très sombre — bords
         (0.72, (140, 10,  18)),  # rouge profond
         (0.48, (230, 40,  30)),  # rouge vif
@@ -388,7 +396,7 @@ class Beam:
         (0.04, (255, 252, 248)), # blanc pur au cœur
     ]
 
-    def __init__(self, rect, dim, life=24, color=None, dmg=1, hits_any_dim=False):
+    def __init__(self, rect, dim, life=24, color=None, dmg=1, hits_any_dim=False, red=False):
         self.rect = rect
         self.dim = dim
         self.life = life
@@ -396,6 +404,7 @@ class Beam:
         self.color = color or Pal.BEAM_FILL  # conservé pour compatibilité
         self.dmg = dmg
         self.hits_any_dim = hits_any_dim
+        self.red = red
         self.dead = False
 
     def update(self):
@@ -413,9 +422,10 @@ class Beam:
         s = pygame.Surface(self.rect.size, pygame.SRCALPHA)
 
         frac_life = t
+        layers = self._LAYERS_RED if self.red else self._LAYERS
         if vertical:
             cx = self.rect.w // 2
-            for frac, col in self._LAYERS:
+            for frac, col in layers:
                 lw = max(1, int(self.rect.w * frac))
                 a  = int(220 * t)
                 pygame.draw.rect(s, (*col, a),
@@ -426,7 +436,7 @@ class Beam:
             pygame.draw.line(s, (255, 252, 248, line_a), (center_x_in_s, 0), (center_x_in_s, s.get_height()))
         else:
             cy = self.rect.h // 2
-            for frac, col in self._LAYERS:
+            for frac, col in layers:
                 lh = max(1, int(self.rect.h * frac))
                 a  = int(220 * t)
                 pygame.draw.rect(s, (*col, a),
@@ -1387,10 +1397,10 @@ class MoonBoss:
                 tx2 = max(self.ax_left + 100, min(self.ax_right - 100, px + random.randint(-70, 70) + 200))
                 ty = max(130, min(570, py + random.randint(-35, 35)))
                 ty2 = max(130, min(570, py + random.randint(-35, 35) - 100))
-                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=65, width=82, dmg=3, hits_any_dim=True)
-                self._tg_beam_vertical(tx2, beams, telegraphs, dim=DIM_REAL, duration=65, width=82, dmg=3, hits_any_dim=True)
-                self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=65, height=68, dmg=3, hits_any_dim=True)
-                self._tg_beam_horizontal(ty2, beams, telegraphs, dim=DIM_REAL, duration=65, height=68, dmg=3, hits_any_dim=True)
+                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=65, width=82, dmg=3, hits_any_dim=True, red=True)
+                self._tg_beam_vertical(tx2, beams, telegraphs, dim=DIM_REAL, duration=65, width=82, dmg=3, hits_any_dim=True, red=True)
+                self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=65, height=68, dmg=3, hits_any_dim=True, red=True)
+                self._tg_beam_horizontal(ty2, beams, telegraphs, dim=DIM_REAL, duration=65, height=68, dmg=3, hits_any_dim=True, red=True)
                 self.attack_timer = int(75 * spd)
 
             elif step == 1:
@@ -1455,7 +1465,7 @@ class MoonBoss:
                     rect = pygame.Rect(int(tx - w / 2), self.ay_top,
                                        int(w), self.ay_bottom - self.ay_top + 400)
                     beams.append(Beam(rect, DIM_REAL, life=18, dmg=2,
-                                      color=(255, 130, 200)))
+                                      color=(255, 130, 200), red=True))
                     burst(particles, tx, 360, 22, (255, 100, 180),
                           7.0, 32, 0.05, 4)
                     self.game.add_shake(10, 14)
@@ -1492,7 +1502,7 @@ class MoonBoss:
                                        int(oy) - length // 2,
                                        thickness, length)
                     beams.append(Beam(rect, DIM_REAL, life=18, dmg=2,
-                                      color=(255, 180, 220)))
+                                      color=(255, 180, 220), red=True))
                     burst(particles, tx, oy, 24, (255, 100, 180),
                           6.0, 28, 0.05, 4)
                     self.game.add_shake(8, 12)
@@ -1596,21 +1606,21 @@ class MoonBoss:
                                     color=Pal.TELEGRAPH, y=y, left=left, right=right,
                                     final_height=60))
 
-    def _tg_beam_vertical(self, x, beams, telegraphs, dim=DIM_REAL, duration=70, width=70, dmg=3, hits_any_dim=False):
+    def _tg_beam_vertical(self, x, beams, telegraphs, dim=DIM_REAL, duration=70, width=70, dmg=3, hits_any_dim=False, red=False):
         def fire():
             rect = pygame.Rect(int(x - width / 2), self.ay_top,
                                int(width), self.ay_bottom - self.ay_top + 400)
-            beams.append(Beam(rect, dim, life=22, dmg=dmg, hits_any_dim=hits_any_dim))
+            beams.append(Beam(rect, dim, life=22, dmg=dmg, hits_any_dim=hits_any_dim, red=red))
         telegraphs.append(Telegraph("beam_v", duration, dim, on_fire=fire,
                                     color=Pal.TELEGRAPH, x=x,
                                     top=self.ay_top, bottom=self.ay_bottom + 400,
                                     final_width=width))
 
-    def _tg_beam_horizontal(self, y, beams, telegraphs, dim=DIM_REAL, duration=70, height=60, dmg=3, hits_any_dim=False):
+    def _tg_beam_horizontal(self, y, beams, telegraphs, dim=DIM_REAL, duration=70, height=60, dmg=3, hits_any_dim=False, red=False):
         def fire():
             rect = pygame.Rect(self.ax_left, int(y - height / 2),
                                self.ax_right - self.ax_left, int(height))
-            beams.append(Beam(rect, dim, life=22, dmg=dmg, hits_any_dim=hits_any_dim))
+            beams.append(Beam(rect, dim, life=22, dmg=dmg, hits_any_dim=hits_any_dim, red=red))
         telegraphs.append(Telegraph("beam_h", duration, dim, on_fire=fire,
                                     color=Pal.TELEGRAPH, y=y,
                                     left=self.ax_left, right=self.ax_right,
@@ -1681,7 +1691,7 @@ class MoonBoss:
                                int(self.ax_right - self.ax_left),
                                int(self.ay_bottom - self.ay_top + 600))
             beams.append(Beam(rect, DIM_REAL, life=55, dmg=10,
-                              hits_any_dim=True, color=(255, 50, 20)))
+                              hits_any_dim=True, color=(255, 50, 20), red=True))
             burst(particles, self.x, self.y, 90, (255, 100, 40), 14.0, 55, 0.0, 6)
             self.game.add_shake(35, 50)
             self.game.start_slowmo(25)
