@@ -1,0 +1,17 @@
+# PyInstaller
+build/dist/
+build/Dreamspawn/
+build/build/
+build/*.spec
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+*.DS_Store
+
+# Python
+*.egg-info/
+.env
+venv/
