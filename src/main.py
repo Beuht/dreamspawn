@@ -1575,6 +1575,36 @@ class MoonBoss:
         if self.hp < 0: self.hp = 0
         return True
 
+    # ── UI helpers ──────────────────────────────────────────────────────────
+    def _phase_color(self, phase):
+        """Couleur de la barre HP selon la phase."""
+        if phase == 1: return Pal.MOON_LIGHT
+        if phase == 2: return (240, 220, 250)
+        if phase == 3: return (160, 160, 220)
+        if phase == 4: return Pal.BOSS_HP_D
+        if phase == 5: return (255, 30, 80) if self.final_form else (200, 60, 120)
+        return Pal.MOON_LIGHT
+
+    def bar_color(self, phase=None):
+        p = phase if phase is not None else self.phase
+        return self._phase_color(p)
+
+    def display_bar_fraction(self):
+        """Fraction d'affichage animée de la barre HP (drain + remplissage lors des transitions)."""
+        frac = max(0.0, self.hp / self.max_hp_total)
+        if self.state == "intro":
+            return 1.0
+        if self.state == "transition":
+            t = self.transition_t
+            if t < 30:
+                k = t / 30
+                return max(0.0, frac * (1 - k ** 0.7))
+            if t < 70:
+                return 0.0
+            k = (t - 70) / 40
+            return min(1.0, 1 - (1 - k) ** 2)
+        return frac
+
     def _start_desperate(self, phase, beams, projectiles, rings, telegraphs, particles, player):
         self.game.start_slowmo(20)
         burst(particles, self.x, self.y, 50, Pal.MOON_GLOW, 8.0, 50, 0.0, 5)
@@ -2007,6 +2037,9 @@ class Game:
         self.announce_t = 0
         self.announce_max = 110
 
+        self.show_controls_popup = False
+        self.title_pulse_t = 0
+
     def toggle_fullscreen(self):
         self.fullscreen = not self.fullscreen
         try:
@@ -2101,6 +2134,8 @@ class Game:
                         self.toggle_fullscreen()
                     elif event.key == pygame.K_RETURN and self.state == STATE_TITLE:
                         self.start_hub()
+                    elif event.key == pygame.K_c and self.state == STATE_TITLE:
+                        self.show_controls_popup = not self.show_controls_popup
                     elif event.key == pygame.K_r and self.state in (STATE_GAMEOVER, STATE_VICTORY):
                         self.start_hub()
                     elif event.key == pygame.K_SPACE and self.state in (STATE_HUB, STATE_MOON):
@@ -2124,6 +2159,7 @@ class Game:
                     do_update = False
 
             if self.state == STATE_TITLE:
+                self.title_pulse_t += 1
                 self.draw_title()
             elif self.state == STATE_HUB:
                 if do_update: self.update_hub()
@@ -2401,9 +2437,6 @@ class Game:
         hp_lbl = self.font_sm.render(f"HP  {self.player.hp}/{self.player.max_hp}", True, Pal.UI)
         self.screen.blit(hp_lbl, (x + 8, y - 1))
 
-        sc = self.font_med.render(f"Score : {self.player.score}", True, Pal.UI)
-        self.screen.blit(sc, (24, 52))
-
         lbl = "RÉALITÉ" if self.player.dimension == DIM_REAL else "RÊVE BRISÉ"
         col = pal_accent(self.player.dimension)
         d_surf = self.font_med.render(lbl, True, col)
@@ -2442,28 +2475,52 @@ class Game:
 
     def draw_boss_ui(self):
         if not self.boss: return
-        bx, by = WIDTH // 2 - 360, HEIGHT - 60
-        bw, bh = 720, 22
-        pygame.draw.rect(self.screen, Pal.BOSS_HP_BG, (bx, by, bw, bh), border_radius=8)
-        frac = max(0.0, self.boss.hp / self.boss.max_hp_total)
-        if self.boss.phase == 5:
-            col = (255, 30, 80) if self.boss.final_form else (255, 80, 130)
-        elif self.boss.phase == 4: col = Pal.BOSS_HP_D
-        elif self.boss.phase == 3: col = (160, 160, 220)
-        else: col = Pal.BOSS_HP
-        pygame.draw.rect(self.screen, col, (bx, by, int(bw * frac), bh), border_radius=8)
+        bw, bh = 680, 20
+        bx = WIDTH // 2 - bw // 2
+        by = 18
+
+        # Fond
+        pygame.draw.rect(self.screen, Pal.BOSS_HP_BG, (bx, by, bw, bh), border_radius=7)
+
+        # Remplissage avec fraction animée (transition + intro)
+        frac = self.boss.display_bar_fraction()
+        col = self.boss.bar_color()
+        fill_w = int(bw * frac)
+        if fill_w > 0:
+            pygame.draw.rect(self.screen, col, (bx, by, fill_w, bh), border_radius=7)
+
+            # Gloss : bande semi-transparente en haut de la barre
+            gloss = pygame.Surface((fill_w, bh // 2), pygame.SRCALPHA)
+            gloss.fill((255, 255, 255, 38))
+            self.screen.blit(gloss, (bx, by))
+
+        # Séparateurs de phases
         for p_id in (2, 3, 4, 5):
             t = PHASE_THRESHOLDS[p_id]
             mx = bx + int(bw * t)
-            pygame.draw.line(self.screen, Pal.UI_DARK, (mx, by - 2), (mx, by + bh + 2), 2)
-        pygame.draw.rect(self.screen, Pal.UI, (bx, by, bw, bh), 2, border_radius=8)
-        name = self.font_med.render(f"LA LUNE — Phase {self.boss.phase}", True, Pal.UI)
-        self.screen.blit(name, name.get_rect(midbottom=(WIDTH // 2, by - 6)))
+            pygame.draw.line(self.screen, Pal.UI_DARK, (mx, by - 3), (mx, by + bh + 3), 2)
+
+        # Contour
+        pygame.draw.rect(self.screen, Pal.UI, (bx, by, bw, bh), 2, border_radius=7)
+
+        # Nom + phase au-dessus
+        name = self.font_med.render(f"LA LUNE  —  Phase {self.boss.phase}", True, Pal.UI)
+        self.screen.blit(name, name.get_rect(midbottom=(WIDTH // 2, by - 4)))
+
+        # Indicateur de dimension en phase 2
         if self.boss.phase == 2 and self.boss.state == "fighting":
             dlbl = "Vulnérable : " + ("RÉALITÉ" if self.boss.dim == DIM_REAL else "RÊVE BRISÉ")
             dc = pal_accent(self.boss.dim)
             s = self.font_sm.render(dlbl, True, dc)
-            self.screen.blit(s, s.get_rect(midtop=(WIDTH // 2, by + bh + 4)))
+            self.screen.blit(s, s.get_rect(midtop=(WIDTH // 2, by + bh + 5)))
+
+        # Avertissement JUGEMENT LUNAIRE (phase 1, step 4 prochain)
+        if (self.boss.phase == 1 and self.boss.state == "fighting"
+                and self.boss.p1_step % 4 == 3):
+            warn_alpha = int(180 + 75 * math.sin(self.frame * 0.18))
+            w_surf = self.font_sm.render("⚠  JUGEMENT LUNAIRE  ⚠", True, (255, 210, 60))
+            w_surf.set_alpha(warn_alpha)
+            self.screen.blit(w_surf, w_surf.get_rect(midtop=(WIDTH // 2, by + bh + 5)))
 
     def draw_announce(self):
         if self.announce_t <= 0 or not self.announce_text: return
@@ -2493,6 +2550,7 @@ class Game:
         self.screen.blit(s, s.get_rect(midbottom=(WIDTH // 2, HEIGHT - 16)))
 
     def draw_title(self):
+        # Fond dégradé
         for y in range(0, HEIGHT, 4):
             t = y / HEIGHT
             c = (int(Pal.R_BG[0] * (1 - t) + Pal.R_BG_FAR[0] * t),
@@ -2502,22 +2560,55 @@ class Game:
         self.starfield.update()
         self.starfield.draw(self.screen, [0, 0], DIM_REAL)
 
-        title = self.font_big.render("DREAMSPAWN", True, Pal.UI)
-        sub = self.font_med.render("Brise la réalité. Tombe les rois du ciel.", True, Pal.UI_DIM)
-        self.screen.blit(title, title.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 80)))
-        self.screen.blit(sub, sub.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 10)))
+        # Glow pulsé sur le titre
+        pulse = 0.7 + 0.3 * math.sin(self.title_pulse_t * 0.04)
+        title_surf = self.font_big.render("DREAMSPAWN", True, Pal.UI)
+        glow_surf = self.font_big.render("DREAMSPAWN", True, (100, 60, 200))
+        glow_surf.set_alpha(int(110 * pulse))
+        tr = title_surf.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 80))
+        for dx, dy in ((-4, 0), (4, 0), (0, -4), (0, 4), (-3, -3), (3, 3), (-3, 3), (3, -3)):
+            self.screen.blit(glow_surf, (tr.x + dx, tr.y + dy))
+        self.screen.blit(title_surf, tr)
 
-        lines = [
-            "ENTRÉE  — commencer",
-            "ESPACE  — saut (3x en l'air = changer de dimension)",
-            "A ou MAJ — dash  (traverse les projectiles roses = PARRY)",
-            "Clic G   — tirer une flèche (cooldown court, pas de spam)",
-            "F ou F11  — plein écran",
-            "ÉCHAP   — quitter / retour au titre",
-        ]
-        for i, l in enumerate(lines):
-            s = self.font_sm.render(l, True, Pal.UI)
-            self.screen.blit(s, s.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 60 + i * 26)))
+        # Sous-titre
+        sub = self.font_med.render("Brise la réalité. Tombe les rois du ciel.", True, Pal.UI_DIM)
+        self.screen.blit(sub, sub.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 16)))
+
+        # Bouton démarrer
+        start_lbl = self.font_med.render("ENTRÉE — commencer", True, Pal.UI)
+        self.screen.blit(start_lbl, start_lbl.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 40)))
+
+        # Hint contrôles en bas
+        hint_col = (180, 160, 220)
+        hint = self.font_sm.render("[C]  Contrôles", True, hint_col)
+        self.screen.blit(hint, hint.get_rect(midbottom=(WIDTH // 2, HEIGHT - 24)))
+
+        # Popup contrôles
+        if self.show_controls_popup:
+            lines = [
+                ("ESPACE",       "Saut  /  Double saut  /  3× en l'air = changer de dimension"),
+                ("A  ou  MAJ",   "Dash  —  traverse les projectiles roses = PARRY"),
+                ("Clic gauche",  "Tirer une flèche  (maintenir = charge)"),
+                ("F  ou  F11",   "Plein écran"),
+                ("ÉCHAP",        "Retour au titre / quitter"),
+            ]
+            pad = 28
+            lh = 30
+            panel_w = 680
+            panel_h = pad * 2 + len(lines) * lh + 10
+            panel_x = WIDTH // 2 - panel_w // 2
+            panel_y = HEIGHT // 2 + 70
+            panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+            panel.fill((12, 6, 28, 210))
+            self.screen.blit(panel, (panel_x, panel_y))
+            pygame.draw.rect(self.screen, (100, 60, 200),
+                             (panel_x, panel_y, panel_w, panel_h), 2, border_radius=8)
+            for i, (key, action) in enumerate(lines):
+                ky = panel_y + pad + i * lh
+                k_surf = self.font_sm.render(key, True, (200, 180, 255))
+                a_surf = self.font_sm.render(action, True, Pal.UI_DIM)
+                self.screen.blit(k_surf, (panel_x + 18, ky))
+                self.screen.blit(a_surf, (panel_x + 190, ky))
 
     def draw_gameover(self):
         overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
