@@ -32,6 +32,7 @@ import math
 import os
 import random
 import sys
+import time
 from collections import deque
 
 import pygame
@@ -376,15 +377,15 @@ class Ring:
 
 
 class Beam:
-    # Gradient bleu : bord foncé → bleu → blanc au centre (tous les lasers)
+    # Gradient mauve/violet : bord foncé → violet → blanc au centre (tous les lasers)
     _LAYERS = [
         # (fraction_largeur, couleur)
-        (1.00, (12,  6,  60)),   # bleu très foncé — bords extérieurs
-        (0.72, (30, 60, 180)),   # bleu foncé
-        (0.48, (70, 130, 255)),  # bleu normal
-        (0.28, (160, 200, 255)), # bleu clair
-        (0.12, (230, 240, 255)), # presque blanc
-        (0.04, (248, 252, 255)), # blanc pur au cœur
+        (1.00, (25,  5,  55)),   # violet très foncé — bords extérieurs
+        (0.72, (80, 20, 150)),   # violet foncé
+        (0.48, (150, 60, 230)),  # mauve normal
+        (0.28, (210, 150, 255)), # mauve clair
+        (0.12, (238, 220, 255)), # quasi blanc mauve
+        (0.04, (250, 245, 255)), # blanc pur au cœur
     ]
 
     def __init__(self, rect, dim, life=24, color=None, dmg=1, hits_any_dim=False):
@@ -2120,6 +2121,10 @@ class Game:
         self.show_controls_popup = False
         self.title_pulse_t = 0
         self.start_btn_rect = pygame.Rect(0, 0, 0, 0)  # mis à jour dans draw_title
+        self.start_phase5_btn_rect = pygame.Rect(0, 0, 0, 0)
+        self.p_press_times = []
+        self.phase5_unlocked = False
+        self.phase5_mode = False
 
     def toggle_fullscreen(self):
         self.fullscreen = not self.fullscreen
@@ -2136,6 +2141,7 @@ class Game:
 
     def reset_to_title(self):
         self.state = STATE_TITLE
+        self.phase5_mode = False
         self.particles = []
         self.projectiles_boss = []
         self.beams = []
@@ -2168,6 +2174,15 @@ class Game:
         self.platforms, spawn = make_moon_arena()
         self.player = Player(*spawn)
         self.boss = MoonBoss(640, 360, self)
+        if self.phase5_mode:
+            # Sauter directement à la phase 5 (HP dans la plage 0-200)
+            self.boss.phase = 5
+            self.boss.hp = 200
+            self.boss.state = "fighting"
+            self.boss.intro_t = 0
+            # Positionner le boss directement à sa position de combat
+            self.boss.x = self.boss.cx
+            self.boss.y = self.boss.cy - 140
         self.cam = [0, 0]
         self.state = STATE_MOON
 
@@ -2217,6 +2232,13 @@ class Game:
                         self.start_hub()
                     elif event.key == pygame.K_c and self.state == STATE_TITLE:
                         self.show_controls_popup = not self.show_controls_popup
+                    elif event.key == pygame.K_p and self.state == STATE_TITLE:
+                        now = time.time()
+                        self.p_press_times = [t for t in self.p_press_times if now - t <= 5.0]
+                        self.p_press_times.append(now)
+                        if len(self.p_press_times) >= 10:
+                            self.phase5_unlocked = True
+                            self.p_press_times = []
                     elif event.key == pygame.K_r and self.state in (STATE_GAMEOVER, STATE_VICTORY):
                         self.start_hub()
                     elif event.key == pygame.K_SPACE and self.state in (STATE_HUB, STATE_MOON):
@@ -2228,8 +2250,13 @@ class Game:
                     if event.key == pygame.K_SPACE and self.state in (STATE_HUB, STATE_MOON):
                         self.player.release_jump()
                 elif event.type == pygame.MOUSEBUTTONDOWN and self.state == STATE_TITLE:
-                    if event.button == 1 and self.start_btn_rect.collidepoint(event.pos):
-                        self.start_hub()
+                    if event.button == 1:
+                        if self.start_btn_rect.collidepoint(event.pos):
+                            self.phase5_mode = False
+                            self.start_hub()
+                        elif self.phase5_unlocked and self.start_phase5_btn_rect.collidepoint(event.pos):
+                            self.phase5_mode = True
+                            self.start_hub()
                 elif event.type == pygame.MOUSEBUTTONDOWN and self.state in (STATE_HUB, STATE_MOON):
                     if event.button == 1:
                         mx, my = event.pos
@@ -2716,6 +2743,25 @@ class Game:
             self.screen.blit(glow, (btn_x - 10, btn_y - 10))
         lbl = self.font_med.render("DÉMARRER", True, btn_text_col)
         self.screen.blit(lbl, lbl.get_rect(center=self.start_btn_rect.center))
+
+        # Bouton secret PHASE 5 (visible seulement si déverrouillé)
+        if self.phase5_unlocked:
+            p5_w, p5_h = 260, 48
+            p5_x = WIDTH // 2 - p5_w // 2
+            p5_y = btn_y + btn_h + 16
+            self.start_phase5_btn_rect = pygame.Rect(p5_x, p5_y, p5_w, p5_h)
+            p5_hovered = self.start_phase5_btn_rect.collidepoint(mx, my)
+            p5_bg     = (120, 10, 50) if p5_hovered else (60, 5, 28)
+            p5_border  = (255, 100, 180) if p5_hovered else (180, 50, 100)
+            p5_text_col = (255, 200, 230) if p5_hovered else (220, 150, 190)
+            pygame.draw.rect(self.screen, p5_bg, self.start_phase5_btn_rect, border_radius=10)
+            pygame.draw.rect(self.screen, p5_border, self.start_phase5_btn_rect, 2, border_radius=10)
+            if p5_hovered:
+                glow5 = pygame.Surface((p5_w + 20, p5_h + 20), pygame.SRCALPHA)
+                pygame.draw.rect(glow5, (220, 60, 130, 45), (0, 0, p5_w + 20, p5_h + 20), border_radius=14)
+                self.screen.blit(glow5, (p5_x - 10, p5_y - 10))
+            p5_lbl = self.font_med.render("⚡ PHASE 5", True, p5_text_col)
+            self.screen.blit(p5_lbl, p5_lbl.get_rect(center=self.start_phase5_btn_rect.center))
 
         # Hint contrôles en bas
         hint_col = (180, 160, 220)
