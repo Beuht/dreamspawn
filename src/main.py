@@ -66,7 +66,7 @@ PLAYER_MAX_HP = 15
 ARROW_SPEED = 13.5
 ARROW_LIFETIME = 100
 BOW_COOLDOWN = 55    # anti-spam : cadence plus lente, dégâts plus forts
-BOW_DAMAGE = 3       # dégât fixe par flèche (plus de charge)
+BOW_DAMAGE = 5       # dégât fixe par flèche
 
 DIM_REAL = 0
 DIM_DREAM = 1
@@ -2461,9 +2461,9 @@ class Game:
 
         for a in self.arrows: a.draw(self.screen, self.cam)
 
-        if in_arena and self.boss and self.boss.state == "fighting" and self.boss.phase == 3:
+        if in_arena and self.boss and self.boss.state == "fighting" and self.boss.phase == 3 and dim == DIM_REAL:
             overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-            overlay.fill((0, 0, 0, 245))   # quasi-noir total dans les deux dimensions
+            overlay.fill((0, 0, 0, 245))   # quasi-noir en réalité seulement (rêve = visible)
             for (sx, sy, rd) in (
                 (self.player.rect.centerx - self.cam[0], self.player.rect.centery - self.cam[1], 110),
                 (int(self.boss.x - self.cam[0]), int(self.boss.y - self.cam[1]), 140)):
