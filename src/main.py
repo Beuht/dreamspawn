@@ -1691,26 +1691,31 @@ class MoonBoss:
             # ── Dessin via sprite ──
             sprite = self._moon_sprite.copy()
 
-            # Tinte selon la phase (overlay coloré)
-            tint = pygame.Surface(sprite.get_size(), pygame.SRCALPHA)
+            # Tinte selon la phase — BLEND_RGB_ADD : ne touche PAS l'alpha,
+            # les pixels transparents restent transparents (pas de carré noir)
+            tint = pygame.Surface(sprite.get_size())  # pas SRCALPHA : RGB seulement
+            apply_tint = False
             if self.phase == 3:
-                tint.fill((30, 30, 80, 90))        # Éclipse : bleu sombre
-                sprite.blit(tint, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+                tint.fill((10, 10, 28))        # Éclipse : bleu sombre (30,30,80 * 90/255)
+                apply_tint = True
             elif self.phase == 5:
                 if self.final_form:
-                    tint.fill((200, 0, 30, 130))   # Final form : rouge sang
+                    tint.fill((102, 0, 15))    # Final form : rouge sang (200,0,30 * 130/255)
                 else:
-                    tint.fill((130, 10, 80, 90))   # Phase 5 : violet sombre
-                sprite.blit(tint, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+                    tint.fill((46, 4, 28))     # Phase 5 : violet sombre (130,10,80 * 90/255)
+                apply_tint = True
             elif self.phase == 2 and self.dim == DIM_DREAM:
-                tint.fill((80, 0, 60, 60))         # Dimension rêve : rose
-                sprite.blit(tint, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+                tint.fill((19, 0, 14))         # Dimension rêve : rose (80,0,60 * 60/255)
+                apply_tint = True
+            if apply_tint:
+                sprite.blit(tint, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
 
-            # Flash de hit : overlay blanc
+            # Flash de hit : overlay blanc — BLEND_RGB_ADD uniquement
             if self.hit_flash > 0:
-                flash = pygame.Surface(sprite.get_size(), pygame.SRCALPHA)
-                flash.fill((255, 255, 255, min(220, self.hit_flash * 22)))
-                sprite.blit(flash, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+                flash_val = min(220, self.hit_flash * 22)
+                flash = pygame.Surface(sprite.get_size())
+                flash.fill((flash_val, flash_val, flash_val))
+                sprite.blit(flash, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
 
             surf.blit(sprite, (cx - self.radius, cy - self.radius))
         else:
