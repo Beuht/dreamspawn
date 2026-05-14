@@ -1078,8 +1078,6 @@ class MoonBoss:
         self.next_phase = 1
         self.attack_timer = 60
         self.subattack_timer = 0
-        # Pour le mode Sans en phase 5 : 2e timer d'attaque en parallèle
-        self.gaster_timer = 0
         # Sous-phase enragée à <6% HP (phase 5 final form)
         self.final_form = False
         self.dim = DIM_REAL
@@ -1097,6 +1095,15 @@ class MoonBoss:
         self.last_resort_active = False
         self.last_resort_t      = 0
         self.last_resort_done   = False
+        self._p4_heal_spawned   = False  # orbe de soin spawné une seule fois
+        self._p4_orb_wait       = 0     # frames depuis spawn de l'orbe (anti-softlock)
+        self._p4_orb_collected  = False  # phase 5 locked until orb collected
+        self._p5_sky_timer      = 0     # timer pluie du ciel phase 5
+        self.pre_dr_active = False       # dialogue animé avant DR
+        self.pre_dr_t = 0
+        self.post_dr = False             # defense buff after DR (arrows deal half dmg)
+        self.final_blow_active = False   # cinématique fin divine à ≤50 HP
+        self.final_blow_t = 0
 
         # Chargement du sprite de la Lune (moon_sprite.png dans le même dossier)
         _base_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -1159,7 +1166,11 @@ class MoonBoss:
         frac = self.hp / self.max_hp_total
         for p in (5, 4, 3, 2):
             if frac <= PHASE_THRESHOLDS[p]:
-                return max(p, self.phase)  # jamais régresser de phase
+                target = max(p, self.phase)
+                # Phase 5 locked until heal orb from phase 4 is collected
+                if target == 5 and not self._p4_orb_collected:
+                    return max(4, self.phase)
+                return target
         return max(1, self.phase)
 
     # ------------------------------------------------------------------
@@ -1377,9 +1388,15 @@ class MoonBoss:
         alive = [f for f in self.fragments if not f.dead]
         if not alive:
             # Spawn orbe de soin une seule fois quand tous les fragments meurent
-            if not getattr(self, '_p4_heal_spawned', False):
+            if not self._p4_heal_spawned:
                 self._p4_heal_spawned = True
                 self.game.heal_orbs.append(HealOrb(self.cx, self.cy - 60, amount=5))
+            # Anti-softlock : si le joueur n'a pas ramassé l'orbe après 600 frames,
+            # on déverrouille la phase 5 automatiquement
+            if not self._p4_orb_collected:
+                self._p4_orb_wait += 1
+                if self._p4_orb_wait >= 600:
+                    self._p4_orb_collected = True
             self.hp = min(self.hp, self.max_hp_total * (PHASE_THRESHOLDS[5] - 0.001))
             return
 
@@ -1413,14 +1430,33 @@ class MoonBoss:
     def _update_p5(self, player, beams, projectiles, rings, telegraphs, particles):
         self.face_state = "rage"
 
-        # ── DERNIERS RECOURS : < 100 HP, une seule fois ──────────────────────
-        if self.hp < 100 and not self.last_resort_done:
-            self.last_resort_done   = True
-            self.last_resort_active = True
-            self.last_resort_t      = 0
-            self.game.announce_phase("DERNIERS RECOURS")
-            self.game.add_shake(24, 60)
-            self.game.start_slowmo(35)
+        # ── FINAL BLOW : déclenché au 2ème DR (post_dr=True, hp≤50) ─────────
+        if (self.post_dr and self.hp <= 50 and
+                not self.final_blow_active and not self.pre_dr_active):
+            self.final_blow_active = True
+            self.final_blow_t = 0
+            self._lr_ox = self.x
+            self._lr_oy = self.y
+            self.game.add_shake(30, 60)
+            return
+
+        if self.final_blow_active:
+            self._update_final_blow(beams, particles, player)
+            return
+
+        # ── PRÉ-DR : dialogue animé avant Derniers Recours ───────────────────
+        if (self.hp < 100 and not self.last_resort_done and
+                not self.pre_dr_active and not self.final_blow_active):
+            self.pre_dr_active = True
+            self.pre_dr_t = 0
+            self._lr_ox = self.x
+            self._lr_oy = self.y
+            self.game.add_shake(18, 30)
+            return
+
+        if self.pre_dr_active:
+            self._update_pre_dr(player)
+            return
 
         if self.last_resort_active:
             self._update_last_resort(beams, telegraphs, particles)
@@ -1506,6 +1542,7 @@ class MoonBoss:
                                       dim=DIM_DREAM, count=10, spread_deg=120)
                 self.attack_timer = int(38 * spd)
 
+
         # ── ORBE PARRY : cadence fixe, toujours viseuse → apprenable ──
         self.subattack_timer -= 1
         if self.subattack_timer <= 0:
@@ -1514,8 +1551,6 @@ class MoonBoss:
 
         # ── PLUIE DU CIEL (final form uniquement) ──
         if self.final_form:
-            if not hasattr(self, "_p5_sky_timer"):
-                self._p5_sky_timer = 0
             self._p5_sky_timer -= 1
             if self._p5_sky_timer <= 0:
                 self._cast_sky_gaster_rain(player, beams, telegraphs, particles)
@@ -1738,6 +1773,83 @@ class MoonBoss:
         if self.hp < 0: self.hp = 0
         return True
 
+    def _update_final_blow(self, beams, particles, player):
+        """Cinématique fin divine : lumière divine → victoire."""
+        self.final_blow_t += 1
+        t = self.final_blow_t
+        player.invuln = max(player.invuln, 10)
+        self.face_state = "open"
+
+        # Phase A (1-40) : charge DR, tremblements
+        if t < 40:
+            shake_amp = min(6.0, t * 0.2)
+            self.x = self._lr_ox + random.uniform(-shake_amp, shake_amp)
+            self.y = self._lr_oy + random.uniform(-shake_amp, shake_amp)
+            if t % 6 == 0:
+                burst(particles, self.x, self.y, 15, (255, 60, 20), 6.0, 20, 0.0, 4)
+            if t == 1:
+                self.game.add_shake(20, 40)
+                self.game.announce_phase("DERNIERS RECOURS…")
+
+        # Phase B (40-80) : flash divin croissant
+        elif t < 80:
+            self.x = self._lr_ox
+            self.y = self._lr_oy
+            if t == 40:
+                self.game.add_shake(40, 50)
+                self.game.start_slowmo(30)
+                burst(particles, self.x, self.y, 200, (255, 255, 255), 18.0, 80, 0.0, 7)
+                burst(particles, self.x, self.y, 80, (200, 240, 255), 12.0, 60, 0.0, 5)
+
+        # Phase C (80-130) : explosion finale
+        elif t < 130:
+            self.x = self._lr_ox
+            self.y = self._lr_oy
+            if t == 80:
+                burst(particles, self.x, self.y, 300, (255, 255, 200), 20.0, 100, 0.0, 8)
+                burst(particles, self.x, self.y, 150, (255, 180, 80), 15.0, 80, 0.0, 6)
+                burst(particles, self.x, self.y, 80, (255, 80, 20), 10.0, 60, 0.0, 5)
+                self.game.add_shake(60, 80)
+                self.game.start_slowmo(60)
+                self.game.announce_phase("CE N'EST PAS LE MOMENT")
+
+        # Phase D (130+) : victoire — désactiver final_blow avant dead=True
+        elif t >= 130:
+            self.final_blow_active = False
+            self.dead = True
+            self.game.final_blow_dialog_t = 1
+
+    def _update_pre_dr(self, player):
+        """Dialogue animé du boss avant Derniers Recours (~120 frames)."""
+        self.pre_dr_t += 1
+        t = self.pre_dr_t
+
+        # Le joueur est invulnérable pendant toute l'animation
+        player.invuln = max(player.invuln, 10)
+
+        # Boss tremble
+        shake_amp = min(10.0, t * 0.15)
+        self.x = self._lr_ox + random.uniform(-shake_amp, shake_amp)
+        self.y = self._lr_oy + random.uniform(-shake_amp, shake_amp)
+        self.face_state = "rage"
+
+        if t % 8 == 0:
+            burst(self.game.particles, self._lr_ox, self._lr_oy, 12,
+                  (220, 40, 20), 7.0, 22, 0.0, 4)
+
+        # Signal au jeu pour le zoom/dialogue
+        self.game.pre_dr_zoom_t = t
+
+        # Fin → lancer DR
+        if t >= 120:
+            self.pre_dr_active = False
+            self.last_resort_done = True
+            self.last_resort_active = True
+            self.last_resort_t = 0
+            self.game.pre_dr_zoom_t = 0
+            self.game.add_shake(24, 60)
+            self.game.start_slowmo(35)
+
     def _update_last_resort(self, beams, telegraphs, particles):
         self.last_resort_t += 1
         t = self.last_resort_t
@@ -1806,23 +1918,49 @@ class MoonBoss:
                                int(self.ay_bottom - self.ay_top + 600))
             beams.append(Beam(rect, DIM_REAL, life=70, dmg=10,
                               hits_any_dim=True, color=(255, 50, 20), red=True))
+            # Faisceaux secondaires décoratifs
+            for _off in (-50, 50):
+                r2 = pygame.Rect(
+                    int(self.ax_left + abs(_off)),
+                    int(self.ay_top),
+                    int(self.ax_right - self.ax_left - abs(_off) * 2),
+                    int(self.ay_bottom - self.ay_top + 600)
+                )
+                beams.append(Beam(r2, DIM_REAL, life=60, dmg=0,
+                                  hits_any_dim=False, red=True))
+            # Faisceau horizontal en croix
+            rect_h = pygame.Rect(
+                int(self.ax_left),
+                int(self._lr_oy) - 40,
+                int(self.ax_right - self.ax_left),
+                80
+            )
+            beams.append(Beam(rect_h, DIM_REAL, life=60, dmg=6,
+                               hits_any_dim=True, red=True))
 
-        # ── PHASE F : AFTERMATH (t 186-420) ──
-        elif t < 420:
+        # ── PHASE F : AFTERMATH court (t 186-260) ──
+        elif t < 260:
             self.x = self._lr_ox
             self.y = self._lr_oy
             if t < 220 and t % 8 == 0:
                 burst(particles, self.x, self.y, 20, (255, 60, 20), 8.0, 28, 0.05, 4)
-                self.game.add_shake(10, 10)
+                self.game.add_shake(8, 8)
 
-        # ── FIN : restauration HP ──
-        if t >= 420:
+        # ── FIN : full heal, renaissance maudite ──
+        if t >= 260:
             self.last_resort_active = False
-            # Le boss récupère 500 HP — renaissance maudite
-            self.hp = min(self.hp + 500, 700)
+            self.post_dr = True
+            # Full heal dans la plage phase 5 (sans bonus HP)
+            self.hp = int(self.max_hp_total * PHASE_THRESHOLDS[5])  # 200 HP
+            # Le joueur récupère aussi tous ses PV
+            if self.game.player:
+                self.game.player.hp = self.game.player.max_hp
+                self.game.player.shield = 0
             self.game.announce_phase("RENAISSANCE MAUDITE")
             self.game.add_shake(30, 40)
             burst(particles, self.x, self.y, 80, (255, 30, 60), 12.0, 60, 0.0, 6)
+            burst(particles, self.x, self.y, 40, (255, 255, 200), 10.0, 50, 0.0, 5)
+            self.game.post_dr_dialog_t = 1
 
     def display_bar_fraction(self):
         """Fraction d'affichage : 0→1 dans la phase courante.
@@ -1892,7 +2030,6 @@ class MoonBoss:
             self.transition_t = 0
             self.attack_timer = 60
             self.subattack_timer = 40
-            self.gaster_timer = 70
             self.dim_timer = 100
             self.fragments = []
             # Remise à zéro des patterns rotatifs
@@ -1921,14 +2058,20 @@ class MoonBoss:
             return 0
         if self.phase == 2 and current_dim != self.dim:
             return 0
+        if self.final_blow_active: return 0   # invincible pendant l'animation finale
         actual = dmg
         if self.phase == 5:
             actual = int(dmg * 1.6) + 1
         self.hp -= actual
-        if self.hp < 0: self.hp = 0
+        if self.post_dr:
+            # Phase post-renaissance : le boss ne meurt pas par les dégâts,
+            # seulement via le final blow quand hp≤50
+            if self.hp < 1: self.hp = 1
+        else:
+            if self.hp < 0: self.hp = 0
+            if self.hp == 0 and self.phase == 5:
+                self.dead = True
         self.hit_flash = 8
-        if self.hp == 0 and self.phase == 5:
-            self.dead = True
         return actual
 
     def draw(self, surf, cam, current_dim):
@@ -2308,6 +2451,13 @@ class Game:
         self.phase5_mode = False
         self.p5_cinematic_t = 0   # >0 while phase-5 intro plays (180 frames total)
 
+        self.god_mode = False
+        self.show_god_dialog = False
+        self.god_input = ""
+        self.pre_dr_zoom_t = 0
+        self.post_dr_dialog_t = 0
+        self.final_blow_dialog_t = 0
+
     def toggle_fullscreen(self):
         self.fullscreen = not self.fullscreen
         try:
@@ -2356,6 +2506,9 @@ class Game:
         self.arrows.clear()
         self.damage_numbers.clear()
         self.heal_orbs.clear()
+        self.pre_dr_zoom_t = 0
+        self.post_dr_dialog_t = 0
+        self.final_blow_dialog_t = 0
         self.platforms, spawn = make_moon_arena()
         self.player = Player(*spawn)
         self.boss = MoonBoss(640, 360, self)
@@ -2405,11 +2558,29 @@ class Game:
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
+                    if self.show_god_dialog:
+                        if event.key == pygame.K_ESCAPE:
+                            self.show_god_dialog = False
+                            self.god_input = ""
+                        elif event.key == pygame.K_BACKSPACE:
+                            self.god_input = self.god_input[:-1]
+                        elif event.key == pygame.K_RETURN:
+                            if self.god_input == "1234":
+                                self.god_mode = True
+                            self.show_god_dialog = False
+                            self.god_input = ""
+                        else:
+                            if len(self.god_input) < 4:
+                                self.god_input += event.unicode
+                        continue
                     if event.key == pygame.K_ESCAPE:
                         if self.state == STATE_TITLE:
                             running = False
                         else:
                             self.reset_to_title()
+                    elif event.key == pygame.K_g:
+                        self.show_god_dialog = True
+                        self.god_input = ""
                     elif event.key == pygame.K_F11 or event.key == pygame.K_f:
                         # F11 (Windows) ET F (universel, Mac n'intercepte pas)
                         self.toggle_fullscreen()
@@ -2473,6 +2644,9 @@ class Game:
                 self.draw_world(in_arena=True)
                 self.draw_victory()
 
+            if self.show_god_dialog:
+                self.draw_god_dialog()
+
             pygame.display.flip()
 
         pygame.quit()
@@ -2525,6 +2699,11 @@ class Game:
             pull_x, pull_y, pull_force = self.boss.get_pull()
         self.player.update(keys, self.platforms, self.particles,
                            pull_x=pull_x, pull_y=pull_y, pull_force=pull_force)
+        if self.god_mode:
+            self.player.hp = self.player.max_hp
+        # Invulnérabilité pendant les animations boss
+        if self.boss and (self.boss.pre_dr_active or self.boss.final_blow_active):
+            self.player.invuln = max(self.player.invuln, 10)
         self._check_dream_timeout()
         if self.boss:
             self.boss.update(self.player, self.beams, self.projectiles_boss,
@@ -2577,7 +2756,8 @@ class Game:
                                       pal_part(self.player.dimension), 4.0, 22, 0.1, 3)
                                 self.add_shake(3, 4)
                         else:
-                            dmg_done = self.boss.take_dmg(a.dmg, self.player.dimension, self.particles)
+                            arrow_dmg = max(1, a.dmg // 2) if (self.boss and self.boss.post_dr) else a.dmg
+                            dmg_done = self.boss.take_dmg(arrow_dmg, self.player.dimension, self.particles)
                             if dmg_done > 0:
                                 self.damage_numbers.append(
                                     DamageNumber(a.x, a.y - 20, str(dmg_done),
@@ -2618,6 +2798,8 @@ class Game:
             if not orb.collected and orb.collect_rect().colliderect(self.player.rect):
                 orb.collected = True
                 self.player.heal(orb.amount)
+                if self.boss:
+                    self.boss._p4_orb_collected = True
                 burst(self.particles, self.player.rect.centerx, self.player.rect.centery,
                       30, (80, 255, 120), 5.0, 35, 0.1, 4)
                 self.announce_phase("+5 HP")
@@ -2630,7 +2812,7 @@ class Game:
             burst(self.particles, self.player.rect.centerx, self.player.rect.centery,
                   60, Pal.HP_FILL, 8.0, 50, 0.0, 5)
 
-        if self.boss and self.boss.dead:
+        if self.boss and self.boss.dead and not self.boss.final_blow_active:
             self.state = STATE_VICTORY
             self.player.score += 1500
             for _ in range(6):
@@ -2805,6 +2987,41 @@ class Game:
                 txt.set_alpha(txt_alpha)
                 self.screen.blit(txt, txt.get_rect(center=(WIDTH // 2, HEIGHT // 2)))
 
+        # ── Pré-DR : overlay sombre + dialogue animé ──────────────────────────
+        if in_arena and self.boss and self.boss.pre_dr_active:
+            t = self.boss.pre_dr_t
+            s = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            s.fill((0, 0, 0, max(0, min(255, int(140 * t / 60)))))
+            self.screen.blit(s, (0, 0))
+            self._draw_boss_dialog(
+                ["AHHHHHH……", "TU VAS VOIR !!!"],
+                t, max_t=120, angry=True
+            )
+
+        # ── Final blow cinematic ────────────────────────────────────────────────
+        if in_arena and self.boss and self.boss.final_blow_active:
+            t = self.boss.final_blow_t
+            s = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            if t < 40:
+                s.fill((0, 0, 0, max(0, min(255, t * 2))))
+            elif t < 80:
+                intensity = max(0, min(255, int(255 * (t - 40) / 40)))
+                s.fill((255, 255, 255, intensity))
+            elif t < 130:
+                intensity = max(0, min(255, int(255 * (1 - (t - 80) / 50))))
+                s.fill((255, 255, 255, intensity))
+            self.screen.blit(s, (0, 0))
+
+        # ── Post-DR dialogue ────────────────────────────────────────────────────
+        if in_arena and self.post_dr_dialog_t > 0:
+            self.post_dr_dialog_t += 1
+            self._draw_boss_dialog(
+                ["…TU T'EN SORTIRAS PAS.", "JE SUIS INDESTRUCTIBLE."],
+                self.post_dr_dialog_t, max_t=200, angry=False
+            )
+            if self.post_dr_dialog_t >= 200:
+                self.post_dr_dialog_t = 0
+
         # ── Derniers Recours cinematic overlay ──
         if in_arena and self.boss and self.boss.last_resort_active:
             t = self.boss.last_resort_t
@@ -2977,6 +3194,15 @@ class Game:
                 ps = self.font_sm.render(phase_str, True, (255, 150, 80))
                 self.screen.blit(ps, ps.get_rect(midtop=(WIDTH // 2, by + bh + 24)))
 
+        # Indicateur post-DR
+        if self.boss and self.boss.post_dr:
+            def_s = self.font_sm.render("DEFENSE ACCRUE  fleches -50%", True, (255, 100, 80))
+            self.screen.blit(def_s, def_s.get_rect(midtop=(WIDTH // 2, 6)))
+        # God mode indicator
+        if self.god_mode:
+            gm_s = self.font_sm.render("GOD MODE", True, (100, 255, 120))
+            self.screen.blit(gm_s, gm_s.get_rect(topright=(WIDTH - 8, 6)))
+
     def draw_announce(self):
         if self.announce_t <= 0 or not self.announce_text: return
         t = self.announce_t / self.announce_max
@@ -2998,6 +3224,75 @@ class Game:
                          (0, HEIGHT // 2 - 60), (WIDTH, HEIGHT // 2 - 60), 2)
         pygame.draw.line(self.screen, pal_accent(self.player.dimension if self.player else DIM_REAL),
                          (0, HEIGHT // 2 + 60), (WIDTH, HEIGHT // 2 + 60), 2)
+
+    def draw_god_dialog(self):
+        pw, ph = 340, 180
+        px = (WIDTH - pw) // 2
+        py = (HEIGHT - ph) // 2
+        panel = pygame.Surface((pw, ph), pygame.SRCALPHA)
+        panel.fill((10, 0, 25, 220))
+        pygame.draw.rect(panel, (160, 60, 220), (0, 0, pw, ph), 2)
+        self.screen.blit(panel, (px, py))
+        # Title
+        title = self.font_med.render("MOT DE PASSE", True, (200, 140, 255))
+        self.screen.blit(title, title.get_rect(midtop=(WIDTH // 2, py + 18)))
+        # Masked input
+        dots = "●" * len(self.god_input) + "▌" if len(self.god_input) < 4 else "●" * 4
+        inp_surf = self.font_big.render(dots, True, (240, 200, 255))
+        self.screen.blit(inp_surf, inp_surf.get_rect(center=(WIDTH // 2, py + 90)))
+        # Status
+        if self.god_mode:
+            status = self.font_sm.render("GOD MODE ACTIF", True, (100, 255, 120))
+        else:
+            status = self.font_sm.render("ENTRÉE → valider   ÉCHAP → annuler", True, (130, 100, 180))
+        self.screen.blit(status, status.get_rect(midbottom=(WIDTH // 2, py + ph - 14)))
+
+    def _draw_boss_dialog(self, lines, t, max_t=120, angry=False, divine=False):
+        """Bulle de dialogue animée. Les lettres apparaissent une à une."""
+        if t <= 0 or t >= max_t:
+            return
+        fade_in = min(1.0, t / 20.0)
+        fade_out = max(0.0, 1.0 - max(0.0, t - (max_t - 20)) / 20.0)
+        alpha = max(0, min(255, int(255 * fade_in * fade_out)))
+        if alpha <= 0:
+            return
+
+        pw, ph = 540, 110
+        px = (WIDTH - pw) // 2
+        py = HEIGHT - ph - 50
+
+        panel = pygame.Surface((pw, ph), pygame.SRCALPHA)
+        if divine:
+            panel.fill((240, 240, 200, max(0, min(255, int(210 * alpha / 255)))))
+            border_col = (255, 220, 60)
+            text_col = (80, 50, 0)
+        elif angry:
+            panel.fill((30, 0, 10, max(0, min(255, int(220 * alpha / 255)))))
+            border_col = (200, 30, 60)
+            text_col = (255, 160, 160)
+        else:
+            panel.fill((10, 0, 25, max(0, min(255, int(220 * alpha / 255)))))
+            border_col = (130, 50, 180)
+            text_col = (220, 190, 255)
+
+        pygame.draw.rect(panel, border_col, (0, 0, pw, ph), 2)
+        self.screen.blit(panel, (px, py))
+
+        # Lettres apparaissent progressivement
+        chars_visible = int(t * 0.75)
+        y_off = py + 16
+        shown_so_far = 0
+        for line in lines:
+            remaining = max(0, chars_visible - shown_so_far)
+            txt = line[:remaining]
+            shown_so_far += len(line) + 2
+            if txt:
+                dx = random.randint(-2, 2) if angry else 0
+                dy = random.randint(-1, 1) if angry else 0
+                surf = self.font_med.render(txt, True, text_col)
+                surf.set_alpha(alpha)
+                self.screen.blit(surf, (px + 16 + dx, y_off + dy))
+            y_off += 36
 
     def draw_hub_overlay(self):
         tip = "Approche un portail. Espace x3 en l'air = fissure la réalité. A = dash. Clic G = tirer (anti-spam). F = plein écran."
