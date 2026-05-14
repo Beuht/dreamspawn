@@ -386,14 +386,14 @@ class Beam:
         (0.12, (238, 220, 255)), # quasi blanc mauve
         (0.04, (250, 245, 255)), # blanc pur au cœur
     ]
-    # Gradient rouge ardent : utilisé uniquement pour les lasers de la phase 5
+    # Gradient sang-de-lune : phase 5 — même structure que le mauve mais cramoisi
     _LAYERS_RED = [
-        (1.00, (40,  2,   5)),   # rouge très sombre — bords
-        (0.72, (140, 10,  18)),  # rouge profond
-        (0.48, (230, 40,  30)),  # rouge vif
-        (0.28, (255, 140,  80)), # orange-rouge clair
-        (0.12, (255, 230, 200)), # quasi-blanc chaud
-        (0.04, (255, 252, 248)), # blanc pur au cœur
+        (1.00, (28,  0,  12)),   # rouge-violet très sombre — bords
+        (0.72, (100,  5,  35)),  # cramoisi profond
+        (0.48, (195, 18,  60)),  # rouge sang
+        (0.28, (235, 70,  90)),  # rouge clair / rose sombre
+        (0.12, (255, 190, 200)), # quasi-blanc rosé
+        (0.04, (255, 245, 248)), # blanc pur au cœur
     ]
 
     def __init__(self, rect, dim, life=24, color=None, dmg=1, hits_any_dim=False, red=False):
