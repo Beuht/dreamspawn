@@ -2077,6 +2077,7 @@ class Game:
 
         self.show_controls_popup = False
         self.title_pulse_t = 0
+        self.start_btn_rect = pygame.Rect(0, 0, 0, 0)  # mis à jour dans draw_title
 
     def toggle_fullscreen(self):
         self.fullscreen = not self.fullscreen
@@ -2184,6 +2185,9 @@ class Game:
                 elif event.type == pygame.KEYUP:
                     if event.key == pygame.K_SPACE and self.state in (STATE_HUB, STATE_MOON):
                         self.player.release_jump()
+                elif event.type == pygame.MOUSEBUTTONDOWN and self.state == STATE_TITLE:
+                    if event.button == 1 and self.start_btn_rect.collidepoint(event.pos):
+                        self.start_hub()
                 elif event.type == pygame.MOUSEBUTTONDOWN and self.state in (STATE_HUB, STATE_MOON):
                     if event.button == 1:
                         mx, my = event.pos
@@ -2652,9 +2656,24 @@ class Game:
         sub = self.font_med.render("Brise la réalité. Tombe les rois du ciel.", True, Pal.UI_DIM)
         self.screen.blit(sub, sub.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 16)))
 
-        # Bouton démarrer
-        start_lbl = self.font_med.render("ENTRÉE — commencer", True, Pal.UI)
-        self.screen.blit(start_lbl, start_lbl.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 40)))
+        # Bouton DÉMARRER cliquable
+        btn_w, btn_h = 260, 48
+        btn_x = WIDTH // 2 - btn_w // 2
+        btn_y = HEIGHT // 2 + 20
+        self.start_btn_rect = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
+        mx, my = pygame.mouse.get_pos()
+        hovered = self.start_btn_rect.collidepoint(mx, my)
+        btn_bg   = (80, 50, 160) if hovered else (40, 24, 90)
+        btn_border = (200, 160, 255) if hovered else (120, 80, 200)
+        btn_text_col = (255, 255, 255) if hovered else (210, 190, 255)
+        pygame.draw.rect(self.screen, btn_bg, self.start_btn_rect, border_radius=10)
+        pygame.draw.rect(self.screen, btn_border, self.start_btn_rect, 2, border_radius=10)
+        if hovered:
+            glow = pygame.Surface((btn_w + 20, btn_h + 20), pygame.SRCALPHA)
+            pygame.draw.rect(glow, (120, 80, 255, 40), (0, 0, btn_w + 20, btn_h + 20), border_radius=14)
+            self.screen.blit(glow, (btn_x - 10, btn_y - 10))
+        lbl = self.font_med.render("DÉMARRER", True, btn_text_col)
+        self.screen.blit(lbl, lbl.get_rect(center=self.start_btn_rect.center))
 
         # Hint contrôles en bas
         hint_col = (180, 160, 220)
