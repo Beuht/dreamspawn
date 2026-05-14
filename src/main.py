@@ -2702,7 +2702,8 @@ class Game:
                 tg.draw(self.screen, self.cam)
             else:
                 old = tg.color
-                tg.color = (180, 180, 200)
+                # Couleur alternative dimension : bleu translucide (pas gris marron)
+                tg.color = (60, 100, 200)
                 tg.draw(self.screen, self.cam)
                 tg.color = old
 
@@ -2810,23 +2811,23 @@ class Game:
             s = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
             if t < 50:
                 # Vignette rouge qui s'intensifie
-                va = int(60 * t / 50)
+                va = max(0, min(255, int(60 * t / 50)))
                 pygame.draw.rect(s, (180, 10, 10, va), (0, 0, WIDTH, HEIGHT), max(6, 80 - t))
             elif t < 110:
                 # Écran qui se noircit quand le boss sort
                 prog = (t - 50) / 60.0
-                va = int(120 * prog)
+                va = max(0, min(255, int(120 * prog)))
                 s.fill((0, 0, 0, va))
             elif t < 155:
                 # Vide : écran très sombre avec pulsation rouge
-                pulse = int(30 + 20 * math.sin(t * 0.25))
+                pulse = max(0, min(255, int(30 + 20 * math.sin(t * 0.25))))
                 s.fill((8, 0, 0, 200))
                 pygame.draw.rect(s, (200, 0, 0, pulse), (0, 0, WIDTH, HEIGHT), 8)
             elif t < 185:
-                # Retour : vignette rouge intense
+                # Retour : vignette rouge qui s'estompe
                 prog = (t - 155) / 30.0
-                va = int(160 * (1 - prog))
-                s.fill((0, 0, 0, int(160 * (1 - prog * 2))))
+                va = max(0, int(160 * (1 - prog)))
+                s.fill((0, 0, 0, max(0, int(100 * (1 - prog)))))
                 pygame.draw.rect(s, (255, 20, 0, va), (0, 0, WIDTH, HEIGHT), 6)
             elif t < 200:
                 # Flash blanc-rouge au moment de l'impact
