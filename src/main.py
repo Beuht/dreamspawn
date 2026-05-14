@@ -535,41 +535,72 @@ class Telegraph:
 
     def draw(self, surf, cam):
         t = self.t
-        pulse = 0.6 + 0.4 * math.sin(self.timer * 0.4)
+        t2 = t * t           # courbe quadratique : buildup lent puis brutal
+        pulse = 0.7 + 0.3 * math.sin(self.timer * 0.35)
+
         if self.kind == "beam_v":
-            x = self.params["x"] - cam[0]
-            top = self.params.get("top", -200) - cam[1]
-            bottom = self.params.get("bottom", HEIGHT + 200) - cam[1]
-            final_w = self.params.get("final_width", 50)
-            w = int(6 + t * (final_w - 6) * pulse)
-            a = int(80 + 140 * t)
-            s = pygame.Surface((max(2, w), max(1, int(bottom - top))), pygame.SRCALPHA)
-            s.fill((*self.color, a))
-            surf.blit(s, (int(x - w / 2), int(top)))
-            pygame.draw.line(surf, self.color,
-                             (int(x - final_w / 2), int(top)),
-                             (int(x - final_w / 2), int(bottom)), 2)
-            pygame.draw.line(surf, self.color,
-                             (int(x + final_w / 2), int(top)),
-                             (int(x + final_w / 2), int(bottom)), 2)
-            pygame.draw.line(surf, self.color, (int(x), int(top)), (int(x), int(bottom)), 2)
+            x    = self.params["x"] - cam[0]
+            top  = self.params.get("top", -200) - cam[1]
+            bot  = self.params.get("bottom", HEIGHT + 200) - cam[1]
+            fw   = self.params.get("final_width", 50)
+            h    = max(1, int(bot - top))
+            pad  = 50   # espace pour le glow extérieur
+
+            s = pygame.Surface((fw + pad * 2, h), pygame.SRCALPHA)
+            cx = pad   # x du bord gauche du rect dans la surface
+
+            # Glow extérieur multicouche — s'intensifie avec t²
+            for extra, base_a in [(pad, 10), (pad * 2 // 3, 20), (pad // 2, 35), (pad // 4, 55)]:
+                ga = int(base_a * t2 * pulse)
+                pygame.draw.rect(s, (*self.color, ga),
+                                 (cx - extra, 0, fw + extra * 2, h))
+
+            # Rectangle principal — monte de presque transparent à dense
+            main_a = int(30 + 180 * t2 * pulse)
+            pygame.draw.rect(s, (*self.color, main_a), (cx, 0, fw, h))
+
+            # Bords nets du rectangle
+            border_a = int(120 + 120 * t)
+            pygame.draw.rect(s, (*self.color, border_a), (cx, 0, fw, h), 2)
+
+            # Flash blanc dans le cœur quand t > 0.75 → alerte imminente
+            if t > 0.75:
+                flash_a = int(220 * ((t - 0.75) / 0.25) * pulse)
+                core_w = max(2, fw // 4)
+                pygame.draw.rect(s, (255, 255, 255, flash_a),
+                                 (cx + fw // 2 - core_w // 2, 0, core_w, h))
+
+            surf.blit(s, (int(x - fw / 2 - pad), int(top)))
+
         elif self.kind == "beam_h":
-            y = self.params["y"] - cam[1]
-            left = self.params.get("left", -200) - cam[0]
+            y     = self.params["y"] - cam[1]
+            left  = self.params.get("left", -200) - cam[0]
             right = self.params.get("right", WIDTH + 200) - cam[0]
-            final_h = self.params.get("final_height", 50)
-            h = int(6 + t * (final_h - 6) * pulse)
-            a = int(80 + 140 * t)
-            s = pygame.Surface((max(1, int(right - left)), max(2, h)), pygame.SRCALPHA)
-            s.fill((*self.color, a))
-            surf.blit(s, (int(left), int(y - h / 2)))
-            pygame.draw.line(surf, self.color,
-                             (int(left), int(y - final_h / 2)),
-                             (int(right), int(y - final_h / 2)), 2)
-            pygame.draw.line(surf, self.color,
-                             (int(left), int(y + final_h / 2)),
-                             (int(right), int(y + final_h / 2)), 2)
-            pygame.draw.line(surf, self.color, (int(left), int(y)), (int(right), int(y)), 2)
+            fh    = self.params.get("final_height", 50)
+            w     = max(1, int(right - left))
+            pad   = 50
+
+            s = pygame.Surface((w, fh + pad * 2), pygame.SRCALPHA)
+            cy = pad
+
+            for extra, base_a in [(pad, 10), (pad * 2 // 3, 20), (pad // 2, 35), (pad // 4, 55)]:
+                ga = int(base_a * t2 * pulse)
+                pygame.draw.rect(s, (*self.color, ga),
+                                 (0, cy - extra, w, fh + extra * 2))
+
+            main_a = int(30 + 180 * t2 * pulse)
+            pygame.draw.rect(s, (*self.color, main_a), (0, cy, w, fh))
+
+            border_a = int(120 + 120 * t)
+            pygame.draw.rect(s, (*self.color, border_a), (0, cy, w, fh), 2)
+
+            if t > 0.75:
+                flash_a = int(220 * ((t - 0.75) / 0.25) * pulse)
+                core_h = max(2, fh // 4)
+                pygame.draw.rect(s, (255, 255, 255, flash_a),
+                                 (0, cy + fh // 2 - core_h // 2, w, core_h))
+
+            surf.blit(s, (int(left), int(y - fh / 2 - pad)))
         elif self.kind == "circle":
             x = int(self.params["x"] - cam[0])
             y = int(self.params["y"] - cam[1])
