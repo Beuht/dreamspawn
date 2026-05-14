@@ -56,7 +56,8 @@ DASH_FRAMES = 10
 DASH_COOLDOWN = 45
 
 TRIPLE_TAP_WINDOW = 75
-SWAP_COOLDOWN = 180
+SWAP_COOLDOWN     = 300   # 5 sec entre chaque switch de dimension
+DREAM_MAX_STAY    = 1200  # 20 sec max dans le rêve avant retour forcé
 SWAP_INVULN_FRAMES = 25
 
 INVULN_FRAMES = 50
@@ -572,9 +573,10 @@ class Player:
         self.dash_dir = 1
         self.dash_trail = deque(maxlen=10)
 
-        self.swap_cooldown = 0
-        self.swap_invuln = 0
-        self.invuln = 0
+        self.swap_cooldown  = 0
+        self.swap_invuln    = 0
+        self.invuln         = 0
+        self.dream_stay_t   = 0   # frames passées en rêve (max DREAM_MAX_STAY)
 
         self.max_hp = PLAYER_MAX_HP
         self.hp = self.max_hp
@@ -666,6 +668,7 @@ class Player:
         self.swap_cooldown = SWAP_COOLDOWN
         self.swap_invuln = SWAP_INVULN_FRAMES
         self.invuln = max(self.invuln, SWAP_INVULN_FRAMES)
+        self.dream_stay_t = 0   # reset chrono à chaque switch
         cx, cy = self.rect.center
         burst(particles, cx, cy, 50, pal_part(self.dimension), 9.0, 45, 0.0, 5)
         burst(particles, cx, cy, 24, pal_accent(self.dimension), 6.0, 30, 0.0, 4)
@@ -683,6 +686,10 @@ class Player:
         if self.swap_cooldown > 0: self.swap_cooldown -= 1
         if self.swap_invuln > 0: self.swap_invuln -= 1
         if self.invuln > 0: self.invuln -= 1
+        if self.dimension == DIM_DREAM:
+            self.dream_stay_t = min(self.dream_stay_t + 1, DREAM_MAX_STAY + 60)
+        else:
+            self.dream_stay_t = 0
         if self.coyote > 0: self.coyote -= 1
         if self.jump_buffer > 0: self.jump_buffer -= 1
 
@@ -1053,14 +1060,14 @@ class MoonBoss:
                 burst(particles, self.x, self.y, 4, Pal.MOON_GLOW, 3.0, 30, 0.05, 3)
         elif self.intro_t == 90:
             self.game.announce_phase(PHASE_NAMES[1])
-        elif self.intro_t == 180:
-            self.face_state = "open"
-            target_x = player.rect.centerx
-            self._cast_giant_beam_v(target_x, beams, telegraphs, particles)
-        elif self.intro_t >= 290:
+        elif self.intro_t == 150:
+            # Le jeu commence directement par un Jugement Stellaire
+            self._cast_lunar_judgment(beams, telegraphs, particles, player)
+        elif self.intro_t >= 440:
             self.state = "fighting"
             self.face_state = "calm"
             self.attack_timer = 60
+            self.p1_step = 0
 
     def _cast_giant_beam_v(self, target_x, beams, telegraphs, particles):
         """ÉNORME rayon vertical d'ouverture : 280px, 3 dmg, gros tell."""
@@ -1118,32 +1125,28 @@ class MoonBoss:
                 self.attack_timer = 110
 
     def _cast_lunar_judgment(self, beams, telegraphs, particles, player):
-        """LE JUGEMENT LUNAIRE : chaîne de 6 ÉNORMES rayons (320px chacun)
+        """LE JUGEMENT STELLAIRE : chaîne de 6 ÉNORMES rayons (320px chacun)
         qui balayent l'arène en cascade rapide non-linéaire. Très brutal."""
         self.face_state = "open"
-        self.game.announce_phase("JUGEMENT LUNAIRE")
+        self.game.announce_phase("JUGEMENT STELLAIRE")
         self.game.add_shake(10, 20)
-        width = 320   # plus large
-        # 6 positions équiréparties dans l'arène
-        positions = []
+        width = 320
         base_left = self.ax_left + 200
         base_right = self.ax_right - 200
-        step = (base_right - base_left) / 5  # 6 positions → 5 intervalles
-        # Ordre non-linéaire qui saute d'un côté à l'autre pour piéger
+        step = (base_right - base_left) / 5
         sequence = [0, 3, 1, 4, 2, 5]
-        for idx, i in enumerate(sequence):
-            positions.append((base_left + i * step, idx))
-        cascade_delay = 30   # plus rapide (45 → 30)
-        tg_base = 60          # telegraph base un peu plus court aussi
+        positions = [(base_left + i * step, idx) for idx, i in enumerate(sequence)]
+        cascade_delay = 30
+        tg_base = 60
         for tx, idx in positions:
             delay = 20 + idx * cascade_delay
             def make_fire(tx=tx):
                 def fire():
                     rect = pygame.Rect(tx - width // 2, self.ay_top,
                                        width, self.ay_bottom - self.ay_top + 400)
+                    # hits_any_dim=True : inévitable par changement de dimension
                     beams.append(Beam(rect, DIM_REAL, life=32, dmg=3,
-                                      color=(255, 240, 210)))
-                    # gros nuage de particules à l'impact
+                                      color=(255, 240, 210), hits_any_dim=True))
                     burst(particles, tx, 280, 35, Pal.BEAM_FILL, 9.0, 50, 0.05, 5)
                     burst(particles, tx, 540, 35, Pal.BEAM_EDGE, 9.0, 50, 0.05, 5)
                     self.game.add_shake(16, 22)
@@ -1195,36 +1198,31 @@ class MoonBoss:
             step = self.p3_step % 6
             self.p3_step += 1
             if step == 0:
-                # Vertical sur le joueur
                 tx = max(self.ax_left + 100, min(self.ax_right - 100, px))
-                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=65, width=85, dmg=2)
+                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=65, width=85, dmg=3, hits_any_dim=True)
                 self.attack_timer = 75
             elif step == 1:
-                # Horizontal sur le joueur
                 ty = max(120, min(580, py))
-                self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=65, height=70, dmg=2)
+                self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=65, height=70, dmg=3, hits_any_dim=True)
                 self.attack_timer = 75
             elif step == 2:
-                # Vertical décalé droite → force le déplacement
                 tx = max(self.ax_left + 100, min(self.ax_right - 100, px + 220))
-                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=60, width=85, dmg=2)
+                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=60, width=85, dmg=3, hits_any_dim=True)
                 self.attack_timer = 70
             elif step == 3:
-                # Horizontal décalé haut
                 ty = max(120, min(580, py - 110))
-                self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=60, height=70, dmg=2)
+                self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=60, height=70, dmg=3, hits_any_dim=True)
                 self.attack_timer = 70
             elif step == 4:
-                # Vertical décalé gauche
                 tx = max(self.ax_left + 100, min(self.ax_right - 100, px - 220))
-                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=60, width=85, dmg=2)
+                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=60, width=85, dmg=3, hits_any_dim=True)
                 self.attack_timer = 70
             else:
-                # Étape 5 : croix (vertical + horizontal simultanés) — signature de fin de cycle
+                # Croix finale — les deux rayons couvrent les deux dimensions
                 tx = max(self.ax_left + 100, min(self.ax_right - 100, px + random.randint(-50, 50)))
                 ty = max(120, min(580, py + random.randint(-30, 30)))
-                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=65, width=75, dmg=2)
-                self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=65, height=65, dmg=2)
+                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=65, width=75, dmg=3, hits_any_dim=True)
+                self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=65, height=65, dmg=3, hits_any_dim=True)
                 self.attack_timer = 90
 
     # ---- PHASE 4 : LA COURONNE BRISÉE ----
@@ -1528,21 +1526,21 @@ class MoonBoss:
                                     color=Pal.TELEGRAPH, y=y, left=left, right=right,
                                     final_height=60))
 
-    def _tg_beam_vertical(self, x, beams, telegraphs, dim=DIM_REAL, duration=70, width=70, dmg=3):
+    def _tg_beam_vertical(self, x, beams, telegraphs, dim=DIM_REAL, duration=70, width=70, dmg=3, hits_any_dim=False):
         def fire():
             rect = pygame.Rect(int(x - width / 2), self.ay_top,
                                int(width), self.ay_bottom - self.ay_top + 400)
-            beams.append(Beam(rect, dim, life=22, dmg=dmg))
+            beams.append(Beam(rect, dim, life=22, dmg=dmg, hits_any_dim=hits_any_dim))
         telegraphs.append(Telegraph("beam_v", duration, dim, on_fire=fire,
                                     color=Pal.TELEGRAPH, x=x,
                                     top=self.ay_top, bottom=self.ay_bottom + 400,
                                     final_width=width))
 
-    def _tg_beam_horizontal(self, y, beams, telegraphs, dim=DIM_REAL, duration=70, height=60, dmg=3):
+    def _tg_beam_horizontal(self, y, beams, telegraphs, dim=DIM_REAL, duration=70, height=60, dmg=3, hits_any_dim=False):
         def fire():
             rect = pygame.Rect(self.ax_left, int(y - height / 2),
                                self.ax_right - self.ax_left, int(height))
-            beams.append(Beam(rect, dim, life=22, dmg=dmg))
+            beams.append(Beam(rect, dim, life=22, dmg=dmg, hits_any_dim=hits_any_dim))
         telegraphs.append(Telegraph("beam_h", duration, dim, on_fire=fire,
                                     color=Pal.TELEGRAPH, y=y,
                                     left=self.ax_left, right=self.ax_right,
@@ -2248,6 +2246,18 @@ class Game:
         self.starfield.update()
         self.dust.update()
 
+    def _check_dream_timeout(self):
+        """Expulse le joueur du rêve après DREAM_MAX_STAY frames + anim de fissure."""
+        if (self.player.dimension == DIM_DREAM
+                and self.player.dream_stay_t >= DREAM_MAX_STAY):
+            self.player.dimension = DIM_REAL
+            self.player.dream_stay_t = 0
+            self.player.swap_cooldown = SWAP_COOLDOWN
+            cx, cy = self.player.rect.center
+            burst(self.particles, cx, cy, 60, Pal.D_ACCENT, 10.0, 50, 0.0, 5)
+            burst(self.particles, cx, cy, 30, (255, 255, 255), 7.0, 35, 0.0, 4)
+            self.add_shake(18, 25)
+
     def update_moon(self):
         keys = pygame.key.get_pressed()
         pull_x, pull_y, pull_force = (None, None, 0.0)
@@ -2255,6 +2265,7 @@ class Game:
             pull_x, pull_y, pull_force = self.boss.get_pull()
         self.player.update(keys, self.platforms, self.particles,
                            pull_x=pull_x, pull_y=pull_y, pull_force=pull_force)
+        self._check_dream_timeout()
         if self.boss:
             self.boss.update(self.player, self.beams, self.projectiles_boss,
                              self.rings, self.telegraphs, self.particles)
@@ -2450,9 +2461,9 @@ class Game:
 
         for a in self.arrows: a.draw(self.screen, self.cam)
 
-        if in_arena and self.boss and self.boss.state == "fighting" and self.boss.phase == 3 and dim == DIM_REAL:
+        if in_arena and self.boss and self.boss.state == "fighting" and self.boss.phase == 3:
             overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-            overlay.fill((8, 4, 16, 220))
+            overlay.fill((0, 0, 0, 245))   # quasi-noir total dans les deux dimensions
             for (sx, sy, rd) in (
                 (self.player.rect.centerx - self.cam[0], self.player.rect.centery - self.cam[1], 110),
                 (int(self.boss.x - self.cam[0]), int(self.boss.y - self.cam[1]), 140)):
@@ -2465,7 +2476,44 @@ class Game:
 
         for d in self.damage_numbers: d.draw(self.screen, self.cam)
 
-        if self.player: self.draw_hud()
+        if self.player:
+            self.draw_hud()
+            if self.player.dimension == DIM_DREAM:
+                self._draw_dream_warning()
+
+    def _draw_dream_warning(self):
+        """Fissures à l'écran quand le joueur approche la limite du rêve (20 sec)."""
+        t = self.player.dream_stay_t / DREAM_MAX_STAY
+        if t < 0.65: return
+        intensity = min(1.0, (t - 0.65) / 0.35)
+        alpha = int(255 * intensity)
+        crack_col = (*Pal.D_ACCENT, alpha)
+        s = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        # Fissures depuis les 4 coins — générées une seule fois via seed stable
+        rng = [
+            ((0, 0),       [(80, 55), (45, 100), (110, 40), (30, 80), (65, 130)]),
+            ((WIDTH, 0),   [(WIDTH-80, 55), (WIDTH-45, 100), (WIDTH-110, 40), (WIDTH-30, 80)]),
+            ((0, HEIGHT),  [(80, HEIGHT-55), (45, HEIGHT-100), (110, HEIGHT-40)]),
+            ((WIDTH, HEIGHT), [(WIDTH-80, HEIGHT-55), (WIDTH-45, HEIGHT-100), (WIDTH-110, HEIGHT-40)]),
+        ]
+        for origin, tips in rng:
+            for tip in tips:
+                pygame.draw.line(s, crack_col, origin, tip, max(1, int(2 * intensity)))
+                # petites branches
+                mid = ((origin[0] + tip[0]) // 2, (origin[1] + tip[1]) // 2)
+                branch = (mid[0] + (tip[1] - origin[1]) // 3,
+                          mid[1] - (tip[0] - origin[0]) // 3)
+                pygame.draw.line(s, crack_col, mid, branch, 1)
+        # Bordure rouge-violet qui pulse
+        border_alpha = int(80 + 80 * math.sin(self.frame * 0.25) * intensity)
+        pygame.draw.rect(s, (*Pal.D_ACCENT, border_alpha), (0, 0, WIDTH, HEIGHT), max(3, int(12 * intensity)))
+        self.screen.blit(s, (0, 0))
+        # Texte d'avertissement
+        if intensity > 0.5:
+            warn_a = int(200 * ((intensity - 0.5) / 0.5))
+            w = self.font_sm.render("FISSURE INSTABLE — retour imminent", True, Pal.D_ACCENT)
+            w.set_alpha(warn_a)
+            self.screen.blit(w, w.get_rect(midbottom=(WIDTH // 2, HEIGHT - 6)))
 
     def draw_hud(self):
         x, y = 24, 20
