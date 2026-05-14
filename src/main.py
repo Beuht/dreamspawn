@@ -1575,36 +1575,6 @@ class MoonBoss:
         if self.hp < 0: self.hp = 0
         return True
 
-    # ── UI helpers ──────────────────────────────────────────────────────────
-    def _phase_color(self, phase):
-        """Couleur de la barre HP selon la phase."""
-        if phase == 1: return Pal.MOON_LIGHT
-        if phase == 2: return (240, 220, 250)
-        if phase == 3: return (160, 160, 220)
-        if phase == 4: return Pal.BOSS_HP_D
-        if phase == 5: return (255, 30, 80) if self.final_form else (200, 60, 120)
-        return Pal.MOON_LIGHT
-
-    def bar_color(self, phase=None):
-        p = phase if phase is not None else self.phase
-        return self._phase_color(p)
-
-    def display_bar_fraction(self):
-        """Fraction d'affichage animée de la barre HP (drain + remplissage lors des transitions)."""
-        frac = max(0.0, self.hp / self.max_hp_total)
-        if self.state == "intro":
-            return 1.0
-        if self.state == "transition":
-            t = self.transition_t
-            if t < 30:
-                k = t / 30
-                return max(0.0, frac * (1 - k ** 0.7))
-            if t < 70:
-                return 0.0
-            k = (t - 70) / 40
-            return min(1.0, 1 - (1 - k) ** 2)
-        return frac
-
     def _start_desperate(self, phase, beams, projectiles, rings, telegraphs, particles, player):
         self.game.start_slowmo(20)
         burst(particles, self.x, self.y, 50, Pal.MOON_GLOW, 8.0, 50, 0.0, 5)
@@ -2475,52 +2445,28 @@ class Game:
 
     def draw_boss_ui(self):
         if not self.boss: return
-        bw, bh = 680, 20
-        bx = WIDTH // 2 - bw // 2
-        by = 18
-
-        # Fond
-        pygame.draw.rect(self.screen, Pal.BOSS_HP_BG, (bx, by, bw, bh), border_radius=7)
-
-        # Remplissage avec fraction animée (transition + intro)
-        frac = self.boss.display_bar_fraction()
-        col = self.boss.bar_color()
-        fill_w = int(bw * frac)
-        if fill_w > 0:
-            pygame.draw.rect(self.screen, col, (bx, by, fill_w, bh), border_radius=7)
-
-            # Gloss : bande semi-transparente en haut de la barre
-            gloss = pygame.Surface((fill_w, bh // 2), pygame.SRCALPHA)
-            gloss.fill((255, 255, 255, 38))
-            self.screen.blit(gloss, (bx, by))
-
-        # Séparateurs de phases
+        bx, by = WIDTH // 2 - 360, HEIGHT - 60
+        bw, bh = 720, 22
+        pygame.draw.rect(self.screen, Pal.BOSS_HP_BG, (bx, by, bw, bh), border_radius=8)
+        frac = max(0.0, self.boss.hp / self.boss.max_hp_total)
+        if self.boss.phase == 5:
+            col = (255, 30, 80) if self.boss.final_form else (255, 80, 130)
+        elif self.boss.phase == 4: col = Pal.BOSS_HP_D
+        elif self.boss.phase == 3: col = (160, 160, 220)
+        else: col = Pal.BOSS_HP
+        pygame.draw.rect(self.screen, col, (bx, by, int(bw * frac), bh), border_radius=8)
         for p_id in (2, 3, 4, 5):
             t = PHASE_THRESHOLDS[p_id]
             mx = bx + int(bw * t)
-            pygame.draw.line(self.screen, Pal.UI_DARK, (mx, by - 3), (mx, by + bh + 3), 2)
-
-        # Contour
-        pygame.draw.rect(self.screen, Pal.UI, (bx, by, bw, bh), 2, border_radius=7)
-
-        # Nom + phase au-dessus
-        name = self.font_med.render(f"LA LUNE  —  Phase {self.boss.phase}", True, Pal.UI)
-        self.screen.blit(name, name.get_rect(midbottom=(WIDTH // 2, by - 4)))
-
-        # Indicateur de dimension en phase 2
+            pygame.draw.line(self.screen, Pal.UI_DARK, (mx, by - 2), (mx, by + bh + 2), 2)
+        pygame.draw.rect(self.screen, Pal.UI, (bx, by, bw, bh), 2, border_radius=8)
+        name = self.font_med.render(f"LA LUNE — Phase {self.boss.phase}", True, Pal.UI)
+        self.screen.blit(name, name.get_rect(midbottom=(WIDTH // 2, by - 6)))
         if self.boss.phase == 2 and self.boss.state == "fighting":
             dlbl = "Vulnérable : " + ("RÉALITÉ" if self.boss.dim == DIM_REAL else "RÊVE BRISÉ")
             dc = pal_accent(self.boss.dim)
             s = self.font_sm.render(dlbl, True, dc)
-            self.screen.blit(s, s.get_rect(midtop=(WIDTH // 2, by + bh + 5)))
-
-        # Avertissement JUGEMENT LUNAIRE (phase 1, step 4 prochain)
-        if (self.boss.phase == 1 and self.boss.state == "fighting"
-                and self.boss.p1_step % 4 == 3):
-            warn_alpha = int(180 + 75 * math.sin(self.frame * 0.18))
-            w_surf = self.font_sm.render("⚠  JUGEMENT LUNAIRE  ⚠", True, (255, 210, 60))
-            w_surf.set_alpha(warn_alpha)
-            self.screen.blit(w_surf, w_surf.get_rect(midtop=(WIDTH // 2, by + bh + 5)))
+            self.screen.blit(s, s.get_rect(midtop=(WIDTH // 2, by + bh + 4)))
 
     def draw_announce(self):
         if self.announce_t <= 0 or not self.announce_text: return
