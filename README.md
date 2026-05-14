@@ -16,23 +16,15 @@ Le twist : tu peux basculer entre **deux dimensions** (Réel / Rêve) pour esqui
 
 ## ⚙️ Installation
 
-### Prérequis
-- Python 3.10+
-- pip
-
 ### Étapes
 
-```bash
-# 1. Cloner le projet
-git clone git@github.com:Beuht/dreamspawn.git
-cd dreamspawn
+1. Télécharge le projet (bouton **Code → Download ZIP** sur GitHub)
+2. Extrais le dossier
+3. Lance le jeu :
+   - **Mac** → double-clic sur `build/build.command`
+   - **Windows** → double-clic sur `build/build.bat`
 
-# 2. Installer les dépendances
-pip install pygame
-
-# 3. Lancer le jeu
-python3 src/main.py
-```
+> Le script installe automatiquement tout ce dont il a besoin et génère le jeu dans `build/dist/`.
 
 ---
 
