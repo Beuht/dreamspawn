@@ -418,40 +418,87 @@ class Beam:
 
     def draw(self, surf, cam):
         t = max(0.0, self.life / self.max_life)
+        alpha = int(230 * t)
+        if alpha <= 0:
+            return
         sx = self.rect.x - cam[0]
         sy = self.rect.y - cam[1]
         vertical = self.rect.h > self.rect.w
+        col = self.color
 
         if _BEAM_FRAMES:
-            # ── Rendu sprite animé ──────────────────────────────────────────
-            # Choisit la frame selon l'avancement de l'animation
-            # (bloqué sur la dernière frame une fois atteinte)
             fi = min(len(_BEAM_FRAMES) - 1, self._anim_t // self.FRAME_DUR)
             raw = _BEAM_FRAMES[fi]
+            fw, fh = raw.get_size()
 
+            # ── 1. Glow en couches sur toute la longueur du beam ───────────
+            glow = pygame.Surface(self.rect.size, pygame.SRCALPHA)
             if vertical:
-                # Étire la frame pour couvrir toute la hauteur du beam
-                scaled = pygame.transform.scale(raw, (self.rect.w, self.rect.h))
+                cx = self.rect.w // 2
+                # couches de glow : large→étroit, transparent→opaque
+                for gw, ga in [
+                    (self.rect.w,        int(18 * t)),
+                    (self.rect.w * 3//4, int(35 * t)),
+                    (self.rect.w // 2,   int(60 * t)),
+                    (self.rect.w // 4,   int(100 * t)),
+                    (max(4, self.rect.w // 10), int(180 * t)),
+                ]:
+                    pygame.draw.rect(glow, (*col, ga),
+                                     (cx - gw // 2, 0, gw, self.rect.h))
+                # cœur blanc brillant
+                core = max(2, self.rect.w // 12)
+                pygame.draw.rect(glow, (255, 255, 255, int(200 * t)),
+                                 (cx - core // 2, 0, core, self.rect.h))
             else:
-                # Rotation 90° pour les beams horizontaux
+                cy = self.rect.h // 2
+                for gh, ga in [
+                    (self.rect.h,        int(18 * t)),
+                    (self.rect.h * 3//4, int(35 * t)),
+                    (self.rect.h // 2,   int(60 * t)),
+                    (self.rect.h // 4,   int(100 * t)),
+                    (max(4, self.rect.h // 10), int(180 * t)),
+                ]:
+                    pygame.draw.rect(glow, (*col, ga),
+                                     (0, cy - gh // 2, self.rect.w, gh))
+                core = max(2, self.rect.h // 12)
+                pygame.draw.rect(glow, (255, 255, 255, int(200 * t)),
+                                 (0, cy - core // 2, self.rect.w, core))
+            surf.blit(glow, (sx, sy))
+
+            # ── 2. Sprite centré à proportion naturelle, sans déformation ──
+            if vertical:
+                # Largeur = largeur du beam, hauteur proportionnelle
+                sp_w = self.rect.w
+                sp_h = int(fh * sp_w / max(1, fw))
+                scaled = pygame.transform.scale(raw, (sp_w, sp_h))
+                # teinte
+                tint = pygame.Surface(scaled.get_size())
+                tint.fill(col)
+                scaled.blit(tint, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
+                scaled.set_alpha(alpha)
+                # centré verticalement dans le beam
+                sprite_y = sy + (self.rect.h - sp_h) // 2
+                surf.blit(scaled, (sx, sprite_y))
+            else:
+                # Rotation 90°, hauteur = hauteur du beam, largeur proportionnelle
                 rotated = pygame.transform.rotate(raw, -90)
-                scaled = pygame.transform.scale(rotated, (self.rect.w, self.rect.h))
-
-            # Teinte couleur via BLEND_RGB_MULT
-            tint = pygame.Surface(scaled.get_size())
-            tint.fill(self.color)
-            scaled.blit(tint, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
-
-            # Fondu sur la durée de vie
-            scaled.set_alpha(int(230 * t))
-            surf.blit(scaled, (sx, sy))
+                rw, rh = rotated.get_size()
+                sp_h = self.rect.h
+                sp_w = int(rw * sp_h / max(1, rh))
+                scaled = pygame.transform.scale(rotated, (sp_w, sp_h))
+                tint = pygame.Surface(scaled.get_size())
+                tint.fill(col)
+                scaled.blit(tint, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
+                scaled.set_alpha(alpha)
+                sprite_x = sx + (self.rect.w - sp_w) // 2
+                surf.blit(scaled, (sprite_x, sy))
 
         else:
             # ── Fallback rectangles (si sprites absents) ────────────────────
             alpha = int(220 * t)
             edge_a = int(180 * t)
             s = pygame.Surface(self.rect.size, pygame.SRCALPHA)
-            s.fill((*self.color, alpha))
+            s.fill((*col, alpha))
             if self.rect.w >= self.rect.h:
                 pygame.draw.rect(s, (*Pal.BEAM_EDGE, edge_a), (0, 0, self.rect.w, 4))
                 pygame.draw.rect(s, (*Pal.BEAM_EDGE, edge_a), (0, self.rect.h - 4, self.rect.w, 4))
