@@ -60,7 +60,7 @@ SWAP_COOLDOWN = 180
 SWAP_INVULN_FRAMES = 25
 
 INVULN_FRAMES = 50
-PLAYER_MAX_HP = 6
+PLAYER_MAX_HP = 15
 
 ARROW_SPEED = 13.5
 ARROW_LIFETIME = 100
@@ -928,7 +928,9 @@ class MoonFragment:
 # BOSS : LA LUNE
 # ---------------------------------------------------------------------------
 
-PHASE_THRESHOLDS = {1: 1.00, 2: 0.80, 3: 0.60, 4: 0.42, 5: 0.20}
+PHASE_THRESHOLDS = {1: 1.00, 2: 0.80, 3: 0.60, 4: 0.40, 5: 0.20}
+# HP de la phase dans la barre (low inclus, high = début de phase)
+PHASE_HP_RANGES  = {1: (800, 1000), 2: (600, 800), 3: (400, 600), 4: (200, 400), 5: (0, 200)}
 
 PHASE_NAMES = {
     1: "L'ŒIL INSOMNIAQUE",
@@ -945,8 +947,7 @@ class MoonBoss:
         self.x = center_x; self.y = -120
         self.target_x = center_x; self.target_y = center_y - 140
         self.radius = 70
-        # +33% de HP pour des phases plus longues
-        self.max_hp_total = 320
+        self.max_hp_total = 1000   # 200 HP par phase × 5
         self.hp = self.max_hp_total
         self.phase = 1
         self.state = "intro"
@@ -971,6 +972,9 @@ class MoonBoss:
         self.eye_offset = (0, 0)
         self.game = game
         self.attacks_since_judgment = 0   # compteur pour déclencher Jugement Lunaire
+        self.last_resort_active = False
+        self.last_resort_t      = 0
+        self.last_resort_done   = False
 
         # Chargement du sprite de la Lune (moon_sprite.png dans le même dossier)
         _base_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -1268,6 +1272,20 @@ class MoonBoss:
     # ---- PHASE 5 : LE CROISSANT INVERSÉ — CHORÉGRAPHIE EN 6 ÉTAPES ----
     def _update_p5(self, player, beams, projectiles, rings, telegraphs, particles):
         self.face_state = "rage"
+
+        # ── DERNIERS RECOURS : < 100 HP, une seule fois ──────────────────────
+        if self.hp < 100 and not self.last_resort_done:
+            self.last_resort_done   = True
+            self.last_resort_active = True
+            self.last_resort_t      = 0
+            self.game.announce_phase("DERNIERS RECOURS")
+            self.game.add_shake(24, 60)
+            self.game.start_slowmo(35)
+
+        if self.last_resort_active:
+            self._update_last_resort(beams, telegraphs, particles)
+            return   # pas d'autres attaques pendant la séquence
+
         if not self.final_form and self.hp / self.max_hp_total < 0.06:
             self.final_form = True
             self.game.announce_phase("DERNIER SOUFFLE")
@@ -1441,7 +1459,7 @@ class MoonBoss:
                     ph.x, ph.y,
                     math.cos(ang) * sp, math.sin(ang) * sp,
                     dim=dim, radius=12, life=220, kind="crescent", color=col,
-                    hits_any_dim=hits_any_dim
+                    hits_any_dim=hits_any_dim, dmg=1
                 ))
         telegraphs.append(Telegraph("fan", 45, dim, on_fire=fire,
                                     color=Pal.TELEGRAPH, x=ox, y=oy,
@@ -1460,7 +1478,7 @@ class MoonBoss:
                         tx + random.uniform(-20, 20), -50,
                         random.uniform(-1.5, 1.5), 8.5,
                         dim=d, radius=14, life=200, kind="meteor", color=color,
-                        hits_any_dim=had
+                        hits_any_dim=had, dmg=1
                     ))
                 return fire
             telegraphs.append(Telegraph("circle", 60 + i * 8, d, on_fire=make_fire(),
@@ -1490,9 +1508,9 @@ class MoonBoss:
                 if any(abs(px - g) < 70 for g in gaps):
                     continue
                 projectiles.append(BossProjectile(
-                    px, y_line, 0, 4.5,  # plus lent (était 7.0)
-                    dim=DIM_REAL, radius=9, life=280, kind="star",
-                    color=(255, 230, 180), hits_any_dim=hits_any_dim
+                    px, y_line, 0, 4.5,
+                    dim=DIM_REAL, radius=7, life=280, kind="star",
+                    color=(255, 230, 180), hits_any_dim=hits_any_dim, dmg=2
                 ))
         telegraphs.append(Telegraph("star_curtain", 70, DIM_REAL, on_fire=fire,
                                     color=Pal.TELEGRAPH, y=y_line, left=left, right=right, gaps=gaps))
@@ -1510,7 +1528,7 @@ class MoonBoss:
                                     color=Pal.TELEGRAPH, y=y, left=left, right=right,
                                     final_height=60))
 
-    def _tg_beam_vertical(self, x, beams, telegraphs, dim=DIM_REAL, duration=70, width=70, dmg=2):
+    def _tg_beam_vertical(self, x, beams, telegraphs, dim=DIM_REAL, duration=70, width=70, dmg=3):
         def fire():
             rect = pygame.Rect(int(x - width / 2), self.ay_top,
                                int(width), self.ay_bottom - self.ay_top + 400)
@@ -1520,7 +1538,7 @@ class MoonBoss:
                                     top=self.ay_top, bottom=self.ay_bottom + 400,
                                     final_width=width))
 
-    def _tg_beam_horizontal(self, y, beams, telegraphs, dim=DIM_REAL, duration=70, height=60, dmg=2):
+    def _tg_beam_horizontal(self, y, beams, telegraphs, dim=DIM_REAL, duration=70, height=60, dmg=3):
         def fire():
             rect = pygame.Rect(self.ax_left, int(y - height / 2),
                                self.ax_right - self.ax_left, int(height))
@@ -1537,7 +1555,7 @@ class MoonBoss:
             self.x, self.y,
             math.cos(ang) * sp, math.sin(ang) * sp,
             dim=dim, radius=11, life=320, homing=0.13, target=player,
-            kind="orb",
+            kind="orb", dmg=1,
             color=(Pal.MOON_GLOW if dim == DIM_REAL else (255, 150, 220))
         ))
 
@@ -1559,7 +1577,7 @@ class MoonBoss:
                 projectiles.append(BossProjectile(
                     frag.x, frag.y,
                     math.cos(a) * sp, math.sin(a) * sp,
-                    dim=frag.dim, radius=10, life=200, kind="orb",
+                    dim=frag.dim, radius=10, life=200, kind="orb", dmg=1,
                     color=(Pal.MOON_GLOW if frag.dim == DIM_REAL else (255, 160, 220))
                 ))
         telegraphs.append(Telegraph("fan", 35, frag.dim, on_fire=fire,
@@ -1575,6 +1593,52 @@ class MoonBoss:
         if self.hp < 0: self.hp = 0
         return True
 
+    def _update_last_resort(self, beams, telegraphs, particles):
+        """Séquence Derniers Recours : 6 secondes (360 frames) invincible.
+        Un rayon colossal couvrant toute l'arène se déclenche à t=80."""
+        self.last_resort_t += 1
+        t = self.last_resort_t
+
+        # Montée en tension : éclairs de particules et secousses
+        if t < 80:
+            if t % 10 == 0:
+                burst(particles, self.x, self.y, 22, (255, 70, 20), 9.0, 28, 0.0, 5)
+            if t % 25 == 0:
+                self.game.add_shake(12, 18)
+
+        # À t=80 : tir du rayon colossal (toute l'arène, toutes dimensions)
+        if t == 80:
+            rect = pygame.Rect(int(self.ax_left),
+                               int(self.ay_top),
+                               int(self.ax_right - self.ax_left),
+                               int(self.ay_bottom - self.ay_top + 600))
+            beams.append(Beam(rect, DIM_REAL, life=55, dmg=10,
+                              hits_any_dim=True, color=(255, 50, 20)))
+            burst(particles, self.x, self.y, 90, (255, 100, 40), 14.0, 55, 0.0, 6)
+            self.game.add_shake(35, 50)
+            self.game.start_slowmo(25)
+
+        # Fin de la séquence (6 sec = 360 frames)
+        if t >= 360:
+            self.last_resort_active = False
+
+    def display_bar_fraction(self):
+        """Fraction d'affichage : 0→1 dans la phase courante.
+        Pendant transition : se vide puis se remplit pour la nouvelle phase."""
+        if self.state == "intro":
+            return 1.0
+        if self.state == "transition":
+            t = self.transition_t
+            if t < 35:
+                return max(0.0, 1.0 - t / 35)   # vide en 35 frames
+            if t < 75:
+                return 0.0
+            k = (t - 75) / 35
+            return min(1.0, k ** 0.5)             # remplissage rapide
+        low, high = PHASE_HP_RANGES.get(self.phase, (0, 1))
+        span = max(1, high - low)
+        return max(0.0, min(1.0, (self.hp - low) / span))
+
     def _start_desperate(self, phase, beams, projectiles, rings, telegraphs, particles, player):
         self.game.start_slowmo(20)
         burst(particles, self.x, self.y, 50, Pal.MOON_GLOW, 8.0, 50, 0.0, 5)
@@ -1585,7 +1649,7 @@ class MoonBoss:
                 projectiles.append(BossProjectile(
                     px, -50 + random.randint(-40, 40),
                     random.uniform(-0.6, 0.6), random.uniform(5.5, 7.5),
-                    dim=DIM_REAL, radius=10, life=240, kind="star", color=(255, 220, 160)
+                    dim=DIM_REAL, radius=7, life=240, kind="star", color=(255, 220, 160), dmg=2
                 ))
         elif phase == 2:
             for k, ang_off in enumerate((-30, 0, 30)):
@@ -1599,7 +1663,7 @@ class MoonBoss:
                         self.x, self.y,
                         math.cos(ang) * 5.8, math.sin(ang) * 5.8,
                         dim=self.dim if k % 2 == 0 else (DIM_DREAM if self.dim == DIM_REAL else DIM_REAL),
-                        radius=12, life=220, kind="crescent"
+                        radius=12, life=220, kind="crescent", dmg=1
                     ))
         elif phase == 3:
             for dx in (-300, 0, 300):
@@ -1611,7 +1675,7 @@ class MoonBoss:
                     a = i * math.tau / 14
                     projectiles.append(BossProjectile(
                         f.x, f.y, math.cos(a) * 5.5, math.sin(a) * 5.5,
-                        dim=f.dim, radius=10, life=200, kind="orb",
+                        dim=f.dim, radius=10, life=200, kind="orb", dmg=1,
                         color=(Pal.MOON_GLOW if f.dim == DIM_REAL else (255, 160, 220))
                     ))
                 f.dead = True
@@ -1649,6 +1713,7 @@ class MoonBoss:
 
     def take_dmg(self, dmg, current_dim, particles):
         if self.state in ("intro", "transition"): return 0
+        if self.last_resort_active: return 0   # invincible pendant Derniers Recours
         if self.phase == 4:
             return 0
         if self.phase == 2 and current_dim != self.dim:
@@ -2414,8 +2479,8 @@ class Game:
 
         lbl = "RÉALITÉ" if self.player.dimension == DIM_REAL else "RÊVE BRISÉ"
         col = pal_accent(self.player.dimension)
-        d_surf = self.font_med.render(lbl, True, col)
-        self.screen.blit(d_surf, d_surf.get_rect(midtop=(WIDTH // 2, 18)))
+        d_surf = self.font_sm.render(lbl, True, col)
+        self.screen.blit(d_surf, (x + 8, y + h + 4))   # sous la barre HP joueur
 
         cd_w = 220
         cd_x = WIDTH // 2 - cd_w // 2
@@ -2450,28 +2515,42 @@ class Game:
 
     def draw_boss_ui(self):
         if not self.boss: return
-        bx, by = WIDTH // 2 - 360, HEIGHT - 60
-        bw, bh = 720, 22
-        pygame.draw.rect(self.screen, Pal.BOSS_HP_BG, (bx, by, bw, bh), border_radius=8)
-        frac = max(0.0, self.boss.hp / self.boss.max_hp_total)
+        bw, bh = 500, 14
+        bx = WIDTH // 2 - bw // 2
+        by = 14   # haut de l'écran, à la place du texte dimension
+
+        # Couleur selon la phase
         if self.boss.phase == 5:
-            col = (255, 30, 80) if self.boss.final_form else (255, 80, 130)
+            col = (255, 30, 80) if self.boss.final_form else (200, 60, 120)
         elif self.boss.phase == 4: col = Pal.BOSS_HP_D
         elif self.boss.phase == 3: col = (160, 160, 220)
         else: col = Pal.BOSS_HP
-        pygame.draw.rect(self.screen, col, (bx, by, int(bw * frac), bh), border_radius=8)
-        for p_id in (2, 3, 4, 5):
-            t = PHASE_THRESHOLDS[p_id]
-            mx = bx + int(bw * t)
-            pygame.draw.line(self.screen, Pal.UI_DARK, (mx, by - 2), (mx, by + bh + 2), 2)
-        pygame.draw.rect(self.screen, Pal.UI, (bx, by, bw, bh), 2, border_radius=8)
-        name = self.font_med.render(f"LA LUNE — Phase {self.boss.phase}", True, Pal.UI)
-        self.screen.blit(name, name.get_rect(midbottom=(WIDTH // 2, by - 6)))
+
+        # Fond
+        pygame.draw.rect(self.screen, Pal.BOSS_HP_BG, (bx, by, bw, bh), border_radius=6)
+        # Remplissage par phase (s'anime 0→1 à chaque transition)
+        frac = self.boss.display_bar_fraction()
+        pygame.draw.rect(self.screen, col, (bx, by, int(bw * frac), bh), border_radius=6)
+        # Contour
+        pygame.draw.rect(self.screen, Pal.UI, (bx, by, bw, bh), 2, border_radius=6)
+
+        # Nom au-dessus
+        name = self.font_sm.render(f"LA LUNE  —  Phase {self.boss.phase}", True, Pal.UI)
+        self.screen.blit(name, name.get_rect(midbottom=(WIDTH // 2, by - 2)))
+
+        # Phase 2 : dimension vulnérable
         if self.boss.phase == 2 and self.boss.state == "fighting":
             dlbl = "Vulnérable : " + ("RÉALITÉ" if self.boss.dim == DIM_REAL else "RÊVE BRISÉ")
             dc = pal_accent(self.boss.dim)
             s = self.font_sm.render(dlbl, True, dc)
             self.screen.blit(s, s.get_rect(midtop=(WIDTH // 2, by + bh + 4)))
+
+        # Derniers Recours : flash rouge pendant la séquence
+        if self.boss.last_resort_active:
+            pulse = int(180 + 75 * math.sin(self.frame * 0.22))
+            w_surf = self.font_sm.render("⚠  DERNIERS RECOURS  ⚠", True, (255, 80, 20))
+            w_surf.set_alpha(pulse)
+            self.screen.blit(w_surf, w_surf.get_rect(midtop=(WIDTH // 2, by + bh + 4)))
 
     def draw_announce(self):
         if self.announce_t <= 0 or not self.announce_text: return
