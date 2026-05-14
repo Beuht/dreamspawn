@@ -8,7 +8,7 @@ echo ""
 
 pip3 show pyinstaller > /dev/null 2>&1 || pip3 install pyinstaller
 
-pyinstaller --name Dreamspawn --noconfirm --windowed --distpath dist --add-data "../assets:assets" ../src/main.py
+python3 -m PyInstaller --name Dreamspawn --noconfirm --windowed --distpath dist --add-data "../assets:assets" ../src/main.py
 
 echo ""
 echo " Build terminé ! Retrouve ton .app dans build/dist/"
