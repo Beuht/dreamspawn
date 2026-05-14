@@ -377,15 +377,15 @@ class Ring:
 
 
 class Beam:
-    # Gradient mauve/violet : bord foncé → violet → blanc au centre (tous les lasers)
+    # Gradient rouge ardent : bord foncé → rouge → blanc au centre (tous les lasers)
     _LAYERS = [
         # (fraction_largeur, couleur)
-        (1.00, (25,  5,  55)),   # violet très foncé — bords extérieurs
-        (0.72, (80, 20, 150)),   # violet foncé
-        (0.48, (150, 60, 230)),  # mauve normal
-        (0.28, (210, 150, 255)), # mauve clair
-        (0.12, (238, 220, 255)), # quasi blanc mauve
-        (0.04, (250, 245, 255)), # blanc pur au cœur
+        (1.00, (40,  2,   5)),   # rouge très sombre — bords
+        (0.72, (140, 10,  18)),  # rouge profond
+        (0.48, (230, 40,  30)),  # rouge vif
+        (0.28, (255, 140,  80)), # orange-rouge clair
+        (0.12, (255, 230, 200)), # quasi-blanc chaud
+        (0.04, (255, 252, 248)), # blanc pur au cœur
     ]
 
     def __init__(self, rect, dim, life=24, color=None, dmg=1, hits_any_dim=False):
@@ -412,6 +412,7 @@ class Beam:
 
         s = pygame.Surface(self.rect.size, pygame.SRCALPHA)
 
+        frac_life = t
         if vertical:
             cx = self.rect.w // 2
             for frac, col in self._LAYERS:
@@ -419,6 +420,10 @@ class Beam:
                 a  = int(220 * t)
                 pygame.draw.rect(s, (*col, a),
                                  (cx - lw // 2, 0, lw, self.rect.h))
+            # Ligne centrale vive
+            center_x_in_s = s.get_width() // 2
+            line_a = int(180 * frac_life)
+            pygame.draw.line(s, (255, 252, 248, line_a), (center_x_in_s, 0), (center_x_in_s, s.get_height()))
         else:
             cy = self.rect.h // 2
             for frac, col in self._LAYERS:
@@ -426,6 +431,9 @@ class Beam:
                 a  = int(220 * t)
                 pygame.draw.rect(s, (*col, a),
                                  (0, cy - lh // 2, self.rect.w, lh))
+            center_y_in_s = s.get_height() // 2
+            line_a = int(180 * frac_life)
+            pygame.draw.line(s, (255, 252, 248, line_a), (0, center_y_in_s), (s.get_width(), center_y_in_s))
 
         surf.blit(s, (sx, sy))
 
@@ -1243,30 +1251,44 @@ class MoonBoss:
             if step == 0:
                 tx = max(self.ax_left + 100, min(self.ax_right - 100, px))
                 self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=65, width=85, dmg=3, hits_any_dim=True)
-                self.attack_timer = 75
+                tx2 = max(self.ax_left + 100, min(self.ax_right - 100, px + 250))
+                self._tg_beam_vertical(tx2, beams, telegraphs, dim=DIM_REAL, duration=65, width=85, dmg=3, hits_any_dim=True)
+                self.attack_timer = 65
             elif step == 1:
                 ty = max(120, min(580, py))
                 self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=65, height=70, dmg=3, hits_any_dim=True)
-                self.attack_timer = 75
+                ty2 = max(120, min(580, py + 130))
+                self._tg_beam_horizontal(ty2, beams, telegraphs, dim=DIM_REAL, duration=65, height=70, dmg=3, hits_any_dim=True)
+                self.attack_timer = 65
             elif step == 2:
                 tx = max(self.ax_left + 100, min(self.ax_right - 100, px + 220))
                 self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=60, width=85, dmg=3, hits_any_dim=True)
-                self.attack_timer = 70
+                tx2 = max(self.ax_left + 100, min(self.ax_right - 100, px + 400))
+                self._tg_beam_vertical(tx2, beams, telegraphs, dim=DIM_REAL, duration=60, width=85, dmg=3, hits_any_dim=True)
+                self.attack_timer = 60
             elif step == 3:
                 ty = max(120, min(580, py - 110))
                 self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=60, height=70, dmg=3, hits_any_dim=True)
-                self.attack_timer = 70
+                ty2 = max(120, min(580, py + 130))
+                self._tg_beam_horizontal(ty2, beams, telegraphs, dim=DIM_REAL, duration=60, height=70, dmg=3, hits_any_dim=True)
+                self.attack_timer = 60
             elif step == 4:
                 tx = max(self.ax_left + 100, min(self.ax_right - 100, px - 220))
                 self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=60, width=85, dmg=3, hits_any_dim=True)
-                self.attack_timer = 70
+                tx2 = max(self.ax_left + 100, min(self.ax_right - 100, px - 400))
+                self._tg_beam_vertical(tx2, beams, telegraphs, dim=DIM_REAL, duration=60, width=85, dmg=3, hits_any_dim=True)
+                self.attack_timer = 60
             else:
-                # Croix finale — les deux rayons couvrent les deux dimensions
+                # Croix finale — 2 verticaux + 2 horizontaux couvrent les deux dimensions
                 tx = max(self.ax_left + 100, min(self.ax_right - 100, px + random.randint(-50, 50)))
+                tx2 = max(self.ax_left + 100, min(self.ax_right - 100, px + random.randint(-50, 50) + 200))
                 ty = max(120, min(580, py + random.randint(-30, 30)))
-                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=65, width=75, dmg=3, hits_any_dim=True)
-                self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=65, height=65, dmg=3, hits_any_dim=True)
-                self.attack_timer = 90
+                ty2 = max(120, min(580, py + random.randint(-30, 30) + 130))
+                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=60, width=75, dmg=3, hits_any_dim=True)
+                self._tg_beam_vertical(tx2, beams, telegraphs, dim=DIM_REAL, duration=60, width=75, dmg=3, hits_any_dim=True)
+                self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=60, height=65, dmg=3, hits_any_dim=True)
+                self._tg_beam_horizontal(ty2, beams, telegraphs, dim=DIM_REAL, duration=60, height=65, dmg=3, hits_any_dim=True)
+                self.attack_timer = 80
 
     # ---- PHASE 4 : LA COURONNE BRISÉE ----
     def _update_p4(self, player, beams, projectiles, rings, telegraphs, particles):
@@ -1339,7 +1361,7 @@ class MoonBoss:
         self.dim_timer -= 1
         if self.dim_timer <= 0:
             self.dim = DIM_DREAM if self.dim == DIM_REAL else DIM_REAL
-            self.dim_timer = 90 if self.final_form else 115
+            self.dim_timer = 70 if self.final_form else 95
 
         # ── SÉQUENCE PRINCIPALE (6 étapes fixes, difficile mais apprenables) ──
         self.attack_timer -= 1
@@ -1360,53 +1382,58 @@ class MoonBoss:
             px, py = player.rect.center
 
             if step == 0:
-                # Étape 0 — CROIX : vertical + horizontal simultanés
-                # Le joueur doit se mettre dans un coin : pattern le plus lisible
+                # Étape 0 — DOUBLE CROIX : 2 verticaux + 2 horizontaux simultanés
                 tx = max(self.ax_left + 100, min(self.ax_right - 100, px + random.randint(-70, 70)))
+                tx2 = max(self.ax_left + 100, min(self.ax_right - 100, px + random.randint(-70, 70) + 200))
                 ty = max(130, min(570, py + random.randint(-35, 35)))
-                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=72, width=82, dmg=2)
-                self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=72, height=68, dmg=2)
-                self.attack_timer = int(88 * spd)
+                ty2 = max(130, min(570, py + random.randint(-35, 35) - 100))
+                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=65, width=82, dmg=3, hits_any_dim=True)
+                self._tg_beam_vertical(tx2, beams, telegraphs, dim=DIM_REAL, duration=65, width=82, dmg=3, hits_any_dim=True)
+                self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=65, height=68, dmg=3, hits_any_dim=True)
+                self._tg_beam_horizontal(ty2, beams, telegraphs, dim=DIM_REAL, duration=65, height=68, dmg=3, hits_any_dim=True)
+                self.attack_timer = int(75 * spd)
 
             elif step == 1:
                 # Étape 1 — GRAND ÉVENTAIL
-                count = 12 if self.final_form else 10
+                count = 14 if self.final_form else 12
                 self._tg_crescent_fan(player, projectiles, telegraphs,
-                                      dim=self.dim, count=count, spread_deg=128)
-                self.attack_timer = int(62 * spd)
+                                      dim=self.dim, count=count, spread_deg=140)
+                self.attack_timer = int(55 * spd)
 
             elif step == 2:
-                # Étape 2 — ORBES GUIDÉES (une par dimension, apprend la mécanique de dimension)
+                # Étape 2 — ORBES GUIDÉES
                 self._fire_homing_orb(player, projectiles, DIM_REAL)
                 self._fire_homing_orb(player, projectiles, DIM_DREAM)
+                self._fire_homing_orb(player, projectiles, self.dim)
                 if self.final_form:
                     self._fire_homing_orb(player, projectiles, self.dim)
-                self.attack_timer = int(58 * spd)
+                self.attack_timer = int(50 * spd)
 
             elif step == 3:
-                # Étape 3 — GASTERS CARDINAUX (depuis N, S, E, O → prévisible)
-                n = 5 if self.final_form else 4
+                # Étape 3 — GASTERS CARDINAUX
+                n = 7 if self.final_form else 5
                 self._cast_gaster_blasters(player, beams, telegraphs, particles, n=n)
-                self.attack_timer = int(72 * spd)
+                self.attack_timer = int(65 * spd)
 
             elif step == 4:
-                # Étape 4 — RIDEAU D'ÉTOILES (réduit, plus lent)
+                # Étape 4 — DOUBLE RIDEAU D'ÉTOILES
                 self._tg_star_curtain(player, projectiles, telegraphs, hits_any_dim=True)
-                self.attack_timer = int(82 * spd)
+                self._tg_star_curtain(player, projectiles, telegraphs, hits_any_dim=True)
+                self.attack_timer = int(70 * spd)
 
             else:
                 # Étape 5 — DOUBLE ÉVENTAIL (real + dream simultanés) → fin de cycle
                 self._tg_crescent_fan(player, projectiles, telegraphs,
-                                      dim=DIM_REAL, count=8, spread_deg=100)
+                                      dim=DIM_REAL, count=10, spread_deg=120)
                 self._tg_crescent_fan(player, projectiles, telegraphs,
-                                      dim=DIM_DREAM, count=8, spread_deg=100)
-                self.attack_timer = int(58 * spd)
+                                      dim=DIM_DREAM, count=10, spread_deg=120)
+                self.attack_timer = int(50 * spd)
 
         # ── ORBE PARRY : cadence fixe, toujours viseuse → apprenable ──
         self.subattack_timer -= 1
         if self.subattack_timer <= 0:
             self._fire_parry_orb(player, projectiles)
-            self.subattack_timer = int(38 * (0.65 if self.final_form else 1.0))
+            self.subattack_timer = int(28 * (0.55 if self.final_form else 0.85))
 
         # ── PLUIE DU CIEL (final form uniquement) ──
         if self.final_form:
@@ -1744,6 +1771,7 @@ class MoonBoss:
             self.game.announce_phase(PHASE_NAMES[self.phase])
             if self.phase == 5:
                 self.game.start_slowmo(30)
+                self.game.p5_cinematic_t = 180
 
     def _drift_to(self, tx, ty, speed=1.4):
         dx, dy = tx - self.x, ty - self.y
@@ -1787,11 +1815,29 @@ class MoonBoss:
         if self.phase == 2:
             glow_col = Pal.MOON_GLOW if self.dim == DIM_REAL else (255, 180, 220)
         elif self.phase == 5:
-            glow_col = (180, 50, 140) if not self.final_form else (255, 30, 60)
+            glow_col = (220, 30, 60) if not self.final_form else (255, 10, 20)
         s = pygame.Surface((self.radius * 4, self.radius * 4), pygame.SRCALPHA)
         pygame.draw.circle(s, (*glow_col, 50), (self.radius * 2, self.radius * 2), self.radius * 2)
         pygame.draw.circle(s, (*glow_col, 80), (self.radius * 2, self.radius * 2), int(self.radius * 1.4))
         surf.blit(s, (cx - self.radius * 2, cy - self.radius * 2))
+
+        if self.phase == 5:
+            pulse_a = int(30 + 25 * math.sin(self.bob_t * 0.18))
+            aura_r = self.radius * 3
+            aura_s = pygame.Surface((aura_r * 2, aura_r * 2), pygame.SRCALPHA)
+            aura_col = (255, 20, 40) if self.final_form else (200, 30, 80)
+            pygame.draw.circle(aura_s, (*aura_col, pulse_a), (aura_r, aura_r), aura_r)
+            surf.blit(aura_s, (cx - aura_r, cy - aura_r))
+            # Anneaux de corruption rayonnants
+            ring_prog = (self.bob_t * 0.12) % 1.0
+            for ri in range(3):
+                rp = (ring_prog + ri / 3) % 1.0
+                rr = int(self.radius * (1.2 + rp * 2.2))
+                ra = int(60 * (1.0 - rp))
+                if ra > 4:
+                    rs = pygame.Surface((rr * 2 + 4, rr * 2 + 4), pygame.SRCALPHA)
+                    pygame.draw.circle(rs, (*aura_col, ra), (rr + 2, rr + 2), rr, 2)
+                    surf.blit(rs, (cx - rr - 2, cy - rr - 2))
 
         if self._moon_sprite:
             # ── Dessin via sprite ──
@@ -1806,9 +1852,9 @@ class MoonBoss:
                 apply_tint = True
             elif self.phase == 5:
                 if self.final_form:
-                    tint.fill((102, 0, 15))    # Final form : rouge sang (200,0,30 * 130/255)
+                    tint.fill((140, 0, 8))     # Final form : rouge sang intense
                 else:
-                    tint.fill((46, 4, 28))     # Phase 5 : violet sombre (130,10,80 * 90/255)
+                    tint.fill((80, 0, 10))     # Phase 5 : rouge sombre
                 apply_tint = True
             elif self.phase == 2 and self.dim == DIM_DREAM:
                 tint.fill((19, 0, 14))         # Dimension rêve : rose (80,0,60 * 60/255)
@@ -1832,7 +1878,7 @@ class MoonBoss:
             elif self.phase == 3:
                 col_main = (200, 200, 230)
             elif self.phase == 5:
-                col_main = (180, 50, 110) if not self.final_form else (220, 10, 50)
+                col_main = (220, 30, 60) if not self.final_form else (255, 10, 30)
             if self.hit_flash > 0:
                 col_main = (255, 230, 230)
             pygame.draw.circle(surf, col_main, (cx, cy), self.radius)
@@ -2125,6 +2171,7 @@ class Game:
         self.p_press_times = []
         self.phase5_unlocked = False
         self.phase5_mode = False
+        self.p5_cinematic_t = 0   # >0 while phase-5 intro plays (180 frames total)
 
     def toggle_fullscreen(self):
         self.fullscreen = not self.fullscreen
@@ -2332,6 +2379,8 @@ class Game:
             self.add_shake(18, 25)
 
     def update_moon(self):
+        if self.p5_cinematic_t > 0:
+            self.p5_cinematic_t -= 1
         keys = pygame.key.get_pressed()
         pull_x, pull_y, pull_force = (None, None, 0.0)
         if self.boss:
@@ -2553,6 +2602,56 @@ class Game:
             self.draw_hud()
             if self.player.dimension == DIM_DREAM:
                 self._draw_dream_warning()
+
+        # ── Phase 5 cinematic zoom ──
+        if hasattr(self, 'p5_cinematic_t') and self.p5_cinematic_t > 0:
+            ct = self.p5_cinematic_t
+            total = 180
+            # Phase A (frames 180→90): zoom in on boss
+            # Phase B (frames 90→0): zoom out to arena + red flash
+            if ct > 90:
+                prog = (ct - 90) / 90.0   # 1.0→0.0 as we zoom in
+                zoom = 1.0 + (1.0 - prog) * 1.8   # 1.0→2.8
+                alpha = int(255 * (1.0 - prog))
+            else:
+                prog = ct / 90.0   # 1.0→0.0 as we zoom out
+                zoom = 1.0 + prog * 0.6   # 1.6→1.0
+                alpha = 0
+
+            # Apply zoom: scale screen around boss position
+            if self.boss and zoom > 1.01:
+                bx = int(self.boss.x - self.cam[0])
+                by = int(self.boss.y - self.cam[1])
+                sw, sh = WIDTH, HEIGHT
+                scaled_w = int(sw / zoom)
+                scaled_h = int(sh / zoom)
+                src_x = max(0, min(sw - scaled_w, bx - scaled_w // 2))
+                src_y = max(0, min(sh - scaled_h, by - scaled_h // 2))
+                sub = self.screen.subsurface(pygame.Rect(src_x, src_y, scaled_w, scaled_h))
+                zoomed = pygame.transform.scale(sub.copy(), (sw, sh))
+                self.screen.blit(zoomed, (0, 0))
+
+            # Red vignette flash at peak zoom (frames ~90)
+            if ct < 100 and ct > 70:
+                flash_prog = 1.0 - abs(ct - 85) / 15.0
+                flash_a = int(180 * flash_prog)
+                flash_s = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+                flash_s.fill((200, 10, 20, flash_a))
+                self.screen.blit(flash_s, (0, 0))
+
+            # Fade in from black at start (frame 180→150)
+            if ct > 150:
+                fade_a = int(255 * (ct - 150) / 30)
+                fade_s = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+                fade_s.fill((0, 0, 0, fade_a))
+                self.screen.blit(fade_s, (0, 0))
+
+            # Text: phase name during zoom
+            if 60 < ct < 130:
+                txt_alpha = min(255, int(255 * min(1.0, (ct - 60) / 20.0) * min(1.0, (130 - ct) / 20.0)))
+                txt = self.font_announce.render("LE CROISSANT INVERSÉ", True, (255, 80, 60))
+                txt.set_alpha(txt_alpha)
+                self.screen.blit(txt, txt.get_rect(center=(WIDTH // 2, HEIGHT // 2)))
 
     def _draw_dream_warning(self):
         """Fissures à l'écran quand le joueur approche la limite du rêve (20 sec)."""
