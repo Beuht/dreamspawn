@@ -1165,11 +1165,11 @@ class MoonBoss:
         if self.attack_timer <= 0:
             self.attacks_since_judgment += 1
             # Jugement Lunaire toutes les 4 attaques (cycle complet)
-            if self.attacks_since_judgment >= 4:
+            if self.attacks_since_judgment >= 3:
                 self._cast_lunar_judgment(beams, telegraphs, particles, player)
                 self.attacks_since_judgment = 0
                 self.p1_step = 0  # repart du début après le jugement
-                self.attack_timer = 220
+                self.attack_timer = 170
                 return
             # Séquence rotative : fan → meteor → fan → star_curtain
             P1_SEQ = ["fan", "meteor", "fan", "star_curtain"]
@@ -1177,13 +1177,13 @@ class MoonBoss:
             self.p1_step += 1
             if choice == "fan":
                 self._tg_crescent_fan(player, projectiles, telegraphs, dim=DIM_REAL, hits_any_dim=True)
-                self.attack_timer = 65
+                self.attack_timer = 48
             elif choice == "meteor":
                 self._tg_meteor_targets(player, projectiles, telegraphs, particles, hits_any_dim=True)
-                self.attack_timer = 85
+                self.attack_timer = 62
             else:  # star_curtain
                 self._tg_star_curtain(player, projectiles, telegraphs, hits_any_dim=True)
-                self.attack_timer = 110
+                self.attack_timer = 80
 
     def _cast_lunar_judgment(self, beams, telegraphs, particles, player):
         """LE JUGEMENT STELLAIRE : chaîne de 6 ÉNORMES rayons (320px chacun)
@@ -1197,8 +1197,8 @@ class MoonBoss:
         step = (base_right - base_left) / 5
         sequence = [0, 3, 1, 4, 2, 5]
         positions = [(base_left + i * step, idx) for idx, i in enumerate(sequence)]
-        cascade_delay = 30
-        tg_base = 60
+        cascade_delay = 20
+        tg_base = 45
         for tx, idx in positions:
             delay = 20 + idx * cascade_delay
             def make_fire(tx=tx):
@@ -1224,7 +1224,7 @@ class MoonBoss:
         self.dim_timer -= 1
         if self.dim_timer <= 0:
             self.dim = DIM_DREAM if self.dim == DIM_REAL else DIM_REAL
-            self.dim_timer = 230
+            self.dim_timer = 170
             burst(particles, self.x, self.y, 40, pal_accent(self.dim), 6.0, 40, 0.0, 4)
         ang = self.bob_t * 0.6
         target_x = self.cx + math.cos(ang) * 320
@@ -1239,15 +1239,16 @@ class MoonBoss:
             self.p2_step += 1
             if choice == "wave":
                 self._tg_tide_wave(player, beams, telegraphs)
-                self.attack_timer = 80
+                self.attack_timer = 58
             elif choice == "homing":
                 # Réduit à 2 orbes (une par dimension)
                 self._fire_homing_orb(player, projectiles, DIM_REAL)
                 self._fire_homing_orb(player, projectiles, DIM_DREAM)
-                self.attack_timer = 55
+                self._fire_homing_orb(player, projectiles, self.dim)
+                self.attack_timer = 42
             else:  # fan_dim
-                self._tg_crescent_fan(player, projectiles, telegraphs, dim=self.dim, count=8)
-                self.attack_timer = 60
+                self._tg_crescent_fan(player, projectiles, telegraphs, dim=self.dim, count=10)
+                self.attack_timer = 44
 
     # ---- PHASE 3 : L'ÉCLIPSE ----
     def _update_p3(self, player, beams, projectiles, rings, telegraphs, particles):
@@ -1256,49 +1257,57 @@ class MoonBoss:
         self.attack_timer -= 1
         if self.attack_timer <= 0:
             px, py = player.rect.centerx, player.rect.centery
-            step = self.p3_step % 6
+            step = self.p3_step % 7
             self.p3_step += 1
             if step == 0:
                 tx = max(self.ax_left + 100, min(self.ax_right - 100, px))
-                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=65, width=85, dmg=3, hits_any_dim=True)
+                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=48, width=85, dmg=3, hits_any_dim=True)
                 tx2 = max(self.ax_left + 100, min(self.ax_right - 100, px + 250))
-                self._tg_beam_vertical(tx2, beams, telegraphs, dim=DIM_REAL, duration=65, width=85, dmg=3, hits_any_dim=True)
-                self.attack_timer = 65
+                self._tg_beam_vertical(tx2, beams, telegraphs, dim=DIM_REAL, duration=48, width=85, dmg=3, hits_any_dim=True)
+                self.attack_timer = 50
             elif step == 1:
                 ty = max(120, min(580, py))
-                self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=65, height=70, dmg=3, hits_any_dim=True)
+                self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=48, height=70, dmg=3, hits_any_dim=True)
                 ty2 = max(120, min(580, py + 130))
-                self._tg_beam_horizontal(ty2, beams, telegraphs, dim=DIM_REAL, duration=65, height=70, dmg=3, hits_any_dim=True)
-                self.attack_timer = 65
+                self._tg_beam_horizontal(ty2, beams, telegraphs, dim=DIM_REAL, duration=48, height=70, dmg=3, hits_any_dim=True)
+                self.attack_timer = 50
             elif step == 2:
                 tx = max(self.ax_left + 100, min(self.ax_right - 100, px + 220))
-                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=60, width=85, dmg=3, hits_any_dim=True)
+                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=44, width=85, dmg=3, hits_any_dim=True)
                 tx2 = max(self.ax_left + 100, min(self.ax_right - 100, px + 400))
-                self._tg_beam_vertical(tx2, beams, telegraphs, dim=DIM_REAL, duration=60, width=85, dmg=3, hits_any_dim=True)
-                self.attack_timer = 60
+                self._tg_beam_vertical(tx2, beams, telegraphs, dim=DIM_REAL, duration=44, width=85, dmg=3, hits_any_dim=True)
+                self.attack_timer = 46
             elif step == 3:
                 ty = max(120, min(580, py - 110))
-                self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=60, height=70, dmg=3, hits_any_dim=True)
+                self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=44, height=70, dmg=3, hits_any_dim=True)
                 ty2 = max(120, min(580, py + 130))
-                self._tg_beam_horizontal(ty2, beams, telegraphs, dim=DIM_REAL, duration=60, height=70, dmg=3, hits_any_dim=True)
-                self.attack_timer = 60
+                self._tg_beam_horizontal(ty2, beams, telegraphs, dim=DIM_REAL, duration=44, height=70, dmg=3, hits_any_dim=True)
+                self.attack_timer = 46
             elif step == 4:
                 tx = max(self.ax_left + 100, min(self.ax_right - 100, px - 220))
-                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=60, width=85, dmg=3, hits_any_dim=True)
+                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=44, width=85, dmg=3, hits_any_dim=True)
                 tx2 = max(self.ax_left + 100, min(self.ax_right - 100, px - 400))
-                self._tg_beam_vertical(tx2, beams, telegraphs, dim=DIM_REAL, duration=60, width=85, dmg=3, hits_any_dim=True)
-                self.attack_timer = 60
-            else:
+                self._tg_beam_vertical(tx2, beams, telegraphs, dim=DIM_REAL, duration=44, width=85, dmg=3, hits_any_dim=True)
+                self.attack_timer = 46
+            elif step == 5:
                 # Croix finale — 2 verticaux + 2 horizontaux couvrent les deux dimensions
                 tx = max(self.ax_left + 100, min(self.ax_right - 100, px + random.randint(-50, 50)))
                 tx2 = max(self.ax_left + 100, min(self.ax_right - 100, px + random.randint(-50, 50) + 200))
                 ty = max(120, min(580, py + random.randint(-30, 30)))
                 ty2 = max(120, min(580, py + random.randint(-30, 30) + 130))
-                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=60, width=75, dmg=3, hits_any_dim=True)
-                self._tg_beam_vertical(tx2, beams, telegraphs, dim=DIM_REAL, duration=60, width=75, dmg=3, hits_any_dim=True)
-                self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=60, height=65, dmg=3, hits_any_dim=True)
-                self._tg_beam_horizontal(ty2, beams, telegraphs, dim=DIM_REAL, duration=60, height=65, dmg=3, hits_any_dim=True)
-                self.attack_timer = 80
+                self._tg_beam_vertical(tx, beams, telegraphs, dim=DIM_REAL, duration=44, width=75, dmg=3, hits_any_dim=True)
+                self._tg_beam_vertical(tx2, beams, telegraphs, dim=DIM_REAL, duration=44, width=75, dmg=3, hits_any_dim=True)
+                self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=44, height=65, dmg=3, hits_any_dim=True)
+                self._tg_beam_horizontal(ty2, beams, telegraphs, dim=DIM_REAL, duration=44, height=65, dmg=3, hits_any_dim=True)
+                self.attack_timer = 60
+            else:  # step 6 — TRIPLE CROIX
+                for dx in (-280, 0, 280):
+                    tx3 = max(self.ax_left + 100, min(self.ax_right - 100, px + dx))
+                    self._tg_beam_vertical(tx3, beams, telegraphs, dim=DIM_REAL, duration=44, width=80, dmg=3, hits_any_dim=True)
+                for dy2 in (-120, 120):
+                    ty3 = max(120, min(580, py + dy2))
+                    self._tg_beam_horizontal(ty3, beams, telegraphs, dim=DIM_REAL, duration=44, height=65, dmg=3, hits_any_dim=True)
+                self.attack_timer = 50
 
     # ---- PHASE 4 : LA COURONNE BRISÉE ----
     def _update_p4(self, player, beams, projectiles, rings, telegraphs, particles):
@@ -1340,7 +1349,7 @@ class MoonBoss:
                     self._fire_homing_orb(player, projectiles, DIM_REAL)
                     self._fire_homing_orb(player, projectiles, DIM_DREAM)
             self.p4_sub_step += 1
-            self.attack_timer = max(40, 78 - 10 * (4 - len(alive)))
+            self.attack_timer = max(25, 55 - 10 * (4 - len(alive)))
 
     # ---- PHASE 5 : LE CROISSANT INVERSÉ — CHORÉGRAPHIE EN 6 ÉTAPES ----
     def _update_p5(self, player, beams, projectiles, rings, telegraphs, particles):
@@ -1371,7 +1380,7 @@ class MoonBoss:
         self.dim_timer -= 1
         if self.dim_timer <= 0:
             self.dim = DIM_DREAM if self.dim == DIM_REAL else DIM_REAL
-            self.dim_timer = 70 if self.final_form else 95
+            self.dim_timer = 50 if self.final_form else 72
 
         # ── SÉQUENCE PRINCIPALE (6 étapes fixes, difficile mais apprenables) ──
         self.attack_timer -= 1
@@ -1401,14 +1410,14 @@ class MoonBoss:
                 self._tg_beam_vertical(tx2, beams, telegraphs, dim=DIM_REAL, duration=65, width=82, dmg=3, hits_any_dim=True, red=True)
                 self._tg_beam_horizontal(ty, beams, telegraphs, dim=DIM_REAL, duration=65, height=68, dmg=3, hits_any_dim=True, red=True)
                 self._tg_beam_horizontal(ty2, beams, telegraphs, dim=DIM_REAL, duration=65, height=68, dmg=3, hits_any_dim=True, red=True)
-                self.attack_timer = int(75 * spd)
+                self.attack_timer = int(58 * spd)
 
             elif step == 1:
                 # Étape 1 — GRAND ÉVENTAIL
                 count = 14 if self.final_form else 12
                 self._tg_crescent_fan(player, projectiles, telegraphs,
                                       dim=self.dim, count=count, spread_deg=140)
-                self.attack_timer = int(55 * spd)
+                self.attack_timer = int(42 * spd)
 
             elif step == 2:
                 # Étape 2 — ORBES GUIDÉES
@@ -1417,19 +1426,19 @@ class MoonBoss:
                 self._fire_homing_orb(player, projectiles, self.dim)
                 if self.final_form:
                     self._fire_homing_orb(player, projectiles, self.dim)
-                self.attack_timer = int(50 * spd)
+                self.attack_timer = int(38 * spd)
 
             elif step == 3:
                 # Étape 3 — GASTERS CARDINAUX
                 n = 7 if self.final_form else 5
                 self._cast_gaster_blasters(player, beams, telegraphs, particles, n=n)
-                self.attack_timer = int(65 * spd)
+                self.attack_timer = int(50 * spd)
 
             elif step == 4:
                 # Étape 4 — DOUBLE RIDEAU D'ÉTOILES
                 self._tg_star_curtain(player, projectiles, telegraphs, hits_any_dim=True)
                 self._tg_star_curtain(player, projectiles, telegraphs, hits_any_dim=True)
-                self.attack_timer = int(70 * spd)
+                self.attack_timer = int(54 * spd)
 
             else:
                 # Étape 5 — DOUBLE ÉVENTAIL (real + dream simultanés) → fin de cycle
@@ -1437,7 +1446,7 @@ class MoonBoss:
                                       dim=DIM_REAL, count=10, spread_deg=120)
                 self._tg_crescent_fan(player, projectiles, telegraphs,
                                       dim=DIM_DREAM, count=10, spread_deg=120)
-                self.attack_timer = int(50 * spd)
+                self.attack_timer = int(38 * spd)
 
         # ── ORBE PARRY : cadence fixe, toujours viseuse → apprenable ──
         self.subattack_timer -= 1
@@ -1452,7 +1461,7 @@ class MoonBoss:
             self._p5_sky_timer -= 1
             if self._p5_sky_timer <= 0:
                 self._cast_sky_gaster_rain(player, beams, telegraphs, particles)
-                self._p5_sky_timer = 95
+                self._p5_sky_timer = 65
 
     def _cast_sky_gaster_rain(self, player, beams, telegraphs, particles):
         """PHASE 5 final form : pluie de 3 gaster blasters verticaux qui
@@ -1672,33 +1681,90 @@ class MoonBoss:
         return True
 
     def _update_last_resort(self, beams, telegraphs, particles):
-        """Séquence Derniers Recours : 6 secondes (360 frames) invincible.
-        Un rayon colossal couvrant toute l'arène se déclenche à t=80."""
         self.last_resort_t += 1
         t = self.last_resort_t
 
-        # Montée en tension : éclairs de particules et secousses
-        if t < 80:
-            if t % 10 == 0:
-                burst(particles, self.x, self.y, 22, (255, 70, 20), 9.0, 28, 0.0, 5)
-            if t % 25 == 0:
-                self.game.add_shake(12, 18)
+        # ── PHASE A : CRISE (t 0-50) — boss crie, tremble intensément ──
+        if t == 1:
+            # Mémorise position d'origine
+            self._lr_ox = self.x
+            self._lr_oy = self.y
+            self.game.announce_phase("DERNIERS RECOURS")
 
-        # À t=80 : tir du rayon colossal (toute l'arène, toutes dimensions)
-        if t == 80:
+        if t < 50:
+            self.face_state = "open"
+            # Tremblement du boss : oscille autour de sa position
+            shake_amp = min(12.0, t * 0.3)
+            self.x = self._lr_ox + random.uniform(-shake_amp, shake_amp)
+            self.y = self._lr_oy + random.uniform(-shake_amp, shake_amp)
+            if t % 5 == 0:
+                burst(particles, self._lr_ox, self._lr_oy, 28, (255, 60, 20), 10.0, 32, 0.0, 5)
+                self.game.add_shake(min(20, int(t * 0.5)), 8)
+            if t % 12 == 0:
+                burst(particles, self._lr_ox, self._lr_oy, 18, (255, 200, 50), 8.0, 24, 0.0, 4)
+
+        # ── PHASE B : SORTIE (t 50-110) — boss fonce vers le haut hors-écran ──
+        elif t < 110:
+            self.face_state = "rage"
+            progress = (t - 50) / 60.0
+            # Accélération exponentielle vers le haut
+            self.y = self._lr_oy - (progress ** 2) * 900
+            self.x = self._lr_ox + math.sin(t * 0.4) * 20
+            if t % 4 == 0:
+                burst(particles, self.x, self.y, 12, (255, 80, 30), 7.0, 18, 0.05, 3)
+            if t == 50:
+                self.game.add_shake(25, 20)
+
+        # ── PHASE C : VIDE (t 110-155) — boss hors-écran, silence avant la tempête ──
+        elif t < 155:
+            self.x = self._lr_ox
+            self.y = -300  # bien caché hors-écran
+            if t % 18 == 0:
+                self.game.add_shake(8, 6)
+
+        # ── PHASE D : RETOUR (t 155-185) — boss plonge depuis le ciel ──
+        elif t < 185:
+            progress = (t - 155) / 30.0
+            # Décélération : arrive vite puis freine
+            ease = 1.0 - (1.0 - progress) ** 3
+            self.x = self._lr_ox
+            self.y = -300 + ease * (self._lr_oy + 300)
+            if t % 3 == 0:
+                burst(particles, self.x, self.y + 40, 18, (255, 40, 10), 9.0, 22, 0.05, 4)
+
+        # ── PHASE E : IMPACT + RAYON (t=185) ──
+        elif t == 185:
+            self.x = self._lr_ox
+            self.y = self._lr_oy
+            # Explosion d'impact
+            burst(particles, self.x, self.y, 120, (255, 80, 20), 16.0, 70, 0.0, 6)
+            burst(particles, self.x, self.y, 80, (255, 220, 60), 12.0, 55, 0.0, 5)
+            self.game.add_shake(45, 70)
+            self.game.start_slowmo(40)
+            # Rayon colossal toute l'arène
             rect = pygame.Rect(int(self.ax_left),
                                int(self.ay_top),
                                int(self.ax_right - self.ax_left),
                                int(self.ay_bottom - self.ay_top + 600))
-            beams.append(Beam(rect, DIM_REAL, life=55, dmg=10,
+            beams.append(Beam(rect, DIM_REAL, life=70, dmg=10,
                               hits_any_dim=True, color=(255, 50, 20), red=True))
-            burst(particles, self.x, self.y, 90, (255, 100, 40), 14.0, 55, 0.0, 6)
-            self.game.add_shake(35, 50)
-            self.game.start_slowmo(25)
 
-        # Fin de la séquence (6 sec = 360 frames)
-        if t >= 360:
+        # ── PHASE F : AFTERMATH (t 186-420) ──
+        elif t < 420:
+            self.x = self._lr_ox
+            self.y = self._lr_oy
+            if t < 220 and t % 8 == 0:
+                burst(particles, self.x, self.y, 20, (255, 60, 20), 8.0, 28, 0.05, 4)
+                self.game.add_shake(10, 10)
+
+        # ── FIN : restauration HP ──
+        if t >= 420:
             self.last_resort_active = False
+            # Le boss récupère 500 HP — renaissance maudite
+            self.hp = min(self.hp + 500, 700)
+            self.game.announce_phase("RENAISSANCE MAUDITE")
+            self.game.add_shake(30, 40)
+            burst(particles, self.x, self.y, 80, (255, 30, 60), 12.0, 60, 0.0, 6)
 
     def display_bar_fraction(self):
         """Fraction d'affichage : 0→1 dans la phase courante.
@@ -2663,6 +2729,36 @@ class Game:
                 txt.set_alpha(txt_alpha)
                 self.screen.blit(txt, txt.get_rect(center=(WIDTH // 2, HEIGHT // 2)))
 
+        # ── Derniers Recours cinematic overlay ──
+        if in_arena and self.boss and self.boss.last_resort_active:
+            t = self.boss.last_resort_t
+            s = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            if t < 50:
+                # Vignette rouge qui s'intensifie
+                va = int(60 * t / 50)
+                pygame.draw.rect(s, (180, 10, 10, va), (0, 0, WIDTH, HEIGHT), max(6, 80 - t))
+            elif t < 110:
+                # Écran qui se noircit quand le boss sort
+                prog = (t - 50) / 60.0
+                va = int(120 * prog)
+                s.fill((0, 0, 0, va))
+            elif t < 155:
+                # Vide : écran très sombre avec pulsation rouge
+                pulse = int(30 + 20 * math.sin(t * 0.25))
+                s.fill((8, 0, 0, 200))
+                pygame.draw.rect(s, (200, 0, 0, pulse), (0, 0, WIDTH, HEIGHT), 8)
+            elif t < 185:
+                # Retour : vignette rouge intense
+                prog = (t - 155) / 30.0
+                va = int(160 * (1 - prog))
+                s.fill((0, 0, 0, int(160 * (1 - prog * 2))))
+                pygame.draw.rect(s, (255, 20, 0, va), (0, 0, WIDTH, HEIGHT), 6)
+            elif t < 200:
+                # Flash blanc-rouge au moment de l'impact
+                fa = int(255 * max(0, 1.0 - (t - 185) / 15.0))
+                s.fill((255, 60, 20, fa))
+            self.screen.blit(s, (0, 0))
+
     def _draw_dream_warning(self):
         """Fissures à l'écran quand le joueur approche la limite du rêve (20 sec)."""
         t = self.player.dream_stay_t / DREAM_MAX_STAY
@@ -2775,12 +2871,24 @@ class Game:
             s = self.font_sm.render(dlbl, True, dc)
             self.screen.blit(s, s.get_rect(midtop=(WIDTH // 2, by + bh + 4)))
 
-        # Derniers Recours : flash rouge pendant la séquence
         if self.boss.last_resort_active:
-            pulse = int(180 + 75 * math.sin(self.frame * 0.22))
-            w_surf = self.font_sm.render("⚠  DERNIERS RECOURS  ⚠", True, (255, 80, 20))
-            w_surf.set_alpha(pulse)
+            t = self.boss.last_resort_t
+            # Barre de boss rouge vif pulsante pendant la séquence
+            pulse = abs(math.sin(self.frame * 0.18))
+            warn_col = (int(200 + 55 * pulse), int(20 * pulse), 20)
+            pygame.draw.rect(self.screen, warn_col, (bx, by, bw, bh), border_radius=6)
+            pygame.draw.rect(self.screen, (255, 100, 50), (bx, by, bw, bh), 2, border_radius=6)
+            w_surf = self.font_sm.render("⚠  DERNIERS RECOURS  ⚠", True, (255, int(80 + 80 * pulse), 20))
             self.screen.blit(w_surf, w_surf.get_rect(midtop=(WIDTH // 2, by + bh + 4)))
+            # Compteur de phase
+            if t < 185:
+                phase_names = {0: "CRISE", 50: "FUITE", 110: "VIDE", 155: "RETOUR"}
+                phase_str = "CRISE"
+                for threshold, name in sorted(phase_names.items()):
+                    if t >= threshold:
+                        phase_str = name
+                ps = self.font_sm.render(phase_str, True, (255, 150, 80))
+                self.screen.blit(ps, ps.get_rect(midtop=(WIDTH // 2, by + bh + 24)))
 
     def draw_announce(self):
         if self.announce_t <= 0 or not self.announce_text: return
