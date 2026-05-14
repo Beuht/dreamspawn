@@ -1,5 +1,5 @@
 #!/bin/bash
-cd "$(dirname "$0")"
+cd "$(dirname "$(realpath "$0")")"
 echo ""
 echo " ================================"
 echo "  DREAMSPAWN — Build Mac"
