@@ -613,6 +613,45 @@ class DamageNumber:
 
 
 # ---------------------------------------------------------------------------
+# Orbe de soin (récompense fin de phase 4)
+# ---------------------------------------------------------------------------
+
+class HealOrb:
+    def __init__(self, x, y, amount=5):
+        self.x = float(x)
+        self.y = float(y)
+        self.amount = amount
+        self.radius = 14
+        self.t = 0.0
+        self.collected = False
+
+    def update(self):
+        self.t += 0.07
+
+    def draw(self, surf, cam):
+        cx = int(self.x - cam[0])
+        cy = int(self.y - cam[1]) + int(math.sin(self.t) * 8)
+        # Glow extérieur pulsant
+        pulse = 0.6 + 0.4 * math.sin(self.t * 1.4)
+        glow_r = int(self.radius * 2.4)
+        gs = pygame.Surface((glow_r * 2, glow_r * 2), pygame.SRCALPHA)
+        pygame.draw.circle(gs, (60, 220, 100, int(55 * pulse)), (glow_r, glow_r), glow_r)
+        surf.blit(gs, (cx - glow_r, cy - glow_r))
+        # Corps de l'orbe
+        pygame.draw.circle(surf, (30, 180, 70), (cx, cy), self.radius)
+        pygame.draw.circle(surf, (120, 255, 150), (cx, cy), self.radius, 2)
+        # Croix de soin
+        pygame.draw.rect(surf, (200, 255, 210), (cx - 2, cy - 7, 4, 14))
+        pygame.draw.rect(surf, (200, 255, 210), (cx - 7, cy - 2, 14, 4))
+        # Reflet
+        pygame.draw.circle(surf, (200, 255, 220), (cx - 4, cy - 4), 3)
+
+    def collect_rect(self):
+        return pygame.Rect(int(self.x) - self.radius, int(self.y) - self.radius,
+                           self.radius * 2, self.radius * 2)
+
+
+# ---------------------------------------------------------------------------
 # Joueur
 # ---------------------------------------------------------------------------
 
@@ -641,6 +680,7 @@ class Player:
 
         self.max_hp = PLAYER_MAX_HP
         self.hp = self.max_hp
+        self.shield = 0  # bouclier (excédant de soin)
 
         self.dimension = DIM_REAL
 
@@ -660,6 +700,7 @@ class Player:
         self.rect.topleft = self.spawn
         self.vx = 0; self.vy = 0
         self.hp = self.max_hp
+        self.shield = 0
         self.dimension = DIM_REAL
         self.dash_timer = 0; self.dash_cooldown = 0
         self.swap_cooldown = 0; self.swap_invuln = 0; self.invuln = 0
@@ -736,9 +777,22 @@ class Player:
 
     def hurt(self, dmg=1):
         if self.invuln > 0: return False
+        if self.shield > 0:
+            absorbed = min(self.shield, dmg)
+            self.shield -= absorbed
+            dmg -= absorbed
         self.hp -= dmg
         self.invuln = INVULN_FRAMES
         return True
+
+    def heal(self, amount):
+        """Soigne amount HP. L'excédant se convertit en shield."""
+        needed = self.max_hp - self.hp
+        healed = min(amount, needed)
+        self.hp += healed
+        overflow = amount - healed
+        if overflow > 0:
+            self.shield = min(self.shield + overflow, 10)
 
     def update(self, keys, platforms, particles, pull_x=None, pull_y=None, pull_force=0.0):
         self.frame += 1
@@ -1105,8 +1159,8 @@ class MoonBoss:
         frac = self.hp / self.max_hp_total
         for p in (5, 4, 3, 2):
             if frac <= PHASE_THRESHOLDS[p]:
-                return p
-        return 1
+                return max(p, self.phase)  # jamais régresser de phase
+        return max(1, self.phase)
 
     # ------------------------------------------------------------------
     # INTRO
@@ -1322,6 +1376,10 @@ class MoonBoss:
 
         alive = [f for f in self.fragments if not f.dead]
         if not alive:
+            # Spawn orbe de soin une seule fois quand tous les fragments meurent
+            if not getattr(self, '_p4_heal_spawned', False):
+                self._p4_heal_spawned = True
+                self.game.heal_orbs.append(HealOrb(self.cx, self.cy - 60, amount=5))
             self.hp = min(self.hp, self.max_hp_total * (PHASE_THRESHOLDS[5] - 0.001))
             return
 
@@ -2207,6 +2265,7 @@ class Game:
         self.telegraphs = []
         self.arrows = []
         self.damage_numbers = []
+        self.heal_orbs = []
         self.starfield = StarField()
         self.dust = DustField(60, bounds=(-200, 0, 1500, 720))
 
@@ -2272,6 +2331,7 @@ class Game:
         self.telegraphs = []
         self.arrows = []
         self.damage_numbers = []
+        self.heal_orbs = []
 
     def start_hub(self):
         self.particles.clear()
@@ -2281,6 +2341,7 @@ class Game:
         self.telegraphs.clear()
         self.arrows.clear()
         self.damage_numbers.clear()
+        self.heal_orbs.clear()
         self.platforms, self.portals, spawn = make_hub()
         self.player = Player(*spawn)
         self.cam = [0, 0]
@@ -2294,6 +2355,7 @@ class Game:
         self.telegraphs.clear()
         self.arrows.clear()
         self.damage_numbers.clear()
+        self.heal_orbs.clear()
         self.platforms, spawn = make_moon_arena()
         self.player = Player(*spawn)
         self.boss = MoonBoss(640, 360, self)
@@ -2549,6 +2611,18 @@ class Game:
         self.particles[:] = [p for p in self.particles if p.alive()]
         for d in self.damage_numbers: d.update()
         self.damage_numbers[:] = [d for d in self.damage_numbers if d.alive()]
+
+        # Orbes de soin — update + collecte
+        for orb in self.heal_orbs:
+            orb.update()
+            if not orb.collected and orb.collect_rect().colliderect(self.player.rect):
+                orb.collected = True
+                self.player.heal(orb.amount)
+                burst(self.particles, self.player.rect.centerx, self.player.rect.centery,
+                      30, (80, 255, 120), 5.0, 35, 0.1, 4)
+                self.announce_phase("+5 HP")
+        self.heal_orbs[:] = [o for o in self.heal_orbs if not o.collected]
+
         if self.announce_t > 0: self.announce_t -= 1
 
         if self.player.hp <= 0:
@@ -2658,6 +2732,7 @@ class Game:
                                   int(proj.y) - proj.radius * 2 - 4 - self.cam[1]))
 
         for a in self.arrows: a.draw(self.screen, self.cam)
+        for orb in self.heal_orbs: orb.draw(self.screen, self.cam)
 
         if in_arena and self.boss and self.boss.state == "fighting" and self.boss.phase == 3 and dim == DIM_REAL:
             overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
@@ -2802,6 +2877,17 @@ class Game:
         pygame.draw.rect(self.screen, Pal.UI, (x, y, w, h), 2, border_radius=6)
         hp_lbl = self.font_sm.render(f"HP  {self.player.hp}/{self.player.max_hp}", True, Pal.UI)
         self.screen.blit(hp_lbl, (x + 8, y - 1))
+
+        # Bouclier (shield) — barre verte sous la barre HP
+        if self.player.shield > 0:
+            sh = 8
+            sy2 = y + h + 3
+            shield_frac = min(1.0, self.player.shield / 10)
+            pygame.draw.rect(self.screen, (20, 60, 30), (x, sy2, w, sh), border_radius=4)
+            pygame.draw.rect(self.screen, (60, 220, 100), (x, sy2, int(w * shield_frac), sh), border_radius=4)
+            pygame.draw.rect(self.screen, (120, 255, 150), (x, sy2, w, sh), 1, border_radius=4)
+            sh_lbl = self.font_sm.render(f"BOUCLIER  {self.player.shield}", True, (120, 255, 150))
+            self.screen.blit(sh_lbl, (x + 8, sy2 - 1))
 
         lbl = "RÉALITÉ" if self.player.dimension == DIM_REAL else "RÊVE BRISÉ"
         col = pal_accent(self.player.dimension)
