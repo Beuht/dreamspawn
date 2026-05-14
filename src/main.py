@@ -375,137 +375,58 @@ class Ring:
         surf.blit(s, (cx - r - 10, cy - r - 10))
 
 
-# ---------------------------------------------------------------------------
-# Sprites animés pour les beams (chargés une fois au démarrage)
-# ---------------------------------------------------------------------------
-_BEAM_FRAMES: list = []   # rempli par _load_beam_sprites()
-
-def _load_beam_sprites():
-    """Charge les 5 frames beam_f1..f5.png depuis assets/images/.
-    Appelé une fois dans Game.__init__. Si absent → fallback rectangles."""
-    global _BEAM_FRAMES
-    _BEAM_FRAMES = []
-    base = getattr(__import__("sys"), "_MEIPASS",
-                   os.path.dirname(os.path.abspath(__file__)))
-    for i in range(1, 6):
-        p = os.path.join(base, "assets", "images", f"beam_f{i}.png")
-        try:
-            _BEAM_FRAMES.append(pygame.image.load(p).convert_alpha())
-        except Exception:
-            _BEAM_FRAMES = []   # si l'un manque → on désactive tout
-            return
-
-
 class Beam:
-    # Durée de chaque frame dans l'animation (en frames de jeu)
-    FRAME_DUR = 4
+    # Gradient bleu : bord foncé → bleu → blanc au centre (tous les lasers)
+    _LAYERS = [
+        # (fraction_largeur, couleur)
+        (1.00, (12,  6,  60)),   # bleu très foncé — bords extérieurs
+        (0.72, (30, 60, 180)),   # bleu foncé
+        (0.48, (70, 130, 255)),  # bleu normal
+        (0.28, (160, 200, 255)), # bleu clair
+        (0.12, (230, 240, 255)), # presque blanc
+        (0.04, (248, 252, 255)), # blanc pur au cœur
+    ]
 
     def __init__(self, rect, dim, life=24, color=None, dmg=1, hits_any_dim=False):
         self.rect = rect
         self.dim = dim
         self.life = life
         self.max_life = life
-        self.color = color or Pal.BEAM_FILL
+        self.color = color or Pal.BEAM_FILL  # conservé pour compatibilité
         self.dmg = dmg
         self.hits_any_dim = hits_any_dim
         self.dead = False
-        self._anim_t = 0   # compteur d'animation
 
     def update(self):
         self.life -= 1
-        self._anim_t += 1
         if self.life <= 0: self.dead = True
 
     def draw(self, surf, cam):
         t = max(0.0, self.life / self.max_life)
-        alpha = int(230 * t)
-        if alpha <= 0:
+        if t <= 0:
             return
         sx = self.rect.x - cam[0]
         sy = self.rect.y - cam[1]
         vertical = self.rect.h > self.rect.w
-        col = self.color
 
-        if _BEAM_FRAMES:
-            fi = min(len(_BEAM_FRAMES) - 1, self._anim_t // self.FRAME_DUR)
-            raw = _BEAM_FRAMES[fi]
-            fw, fh = raw.get_size()
+        s = pygame.Surface(self.rect.size, pygame.SRCALPHA)
 
-            # ── 1. Glow en couches sur toute la longueur du beam ───────────
-            glow = pygame.Surface(self.rect.size, pygame.SRCALPHA)
-            if vertical:
-                cx = self.rect.w // 2
-                # couches de glow : large→étroit, transparent→opaque
-                for gw, ga in [
-                    (self.rect.w,        int(18 * t)),
-                    (self.rect.w * 3//4, int(35 * t)),
-                    (self.rect.w // 2,   int(60 * t)),
-                    (self.rect.w // 4,   int(100 * t)),
-                    (max(4, self.rect.w // 10), int(180 * t)),
-                ]:
-                    pygame.draw.rect(glow, (*col, ga),
-                                     (cx - gw // 2, 0, gw, self.rect.h))
-                # cœur blanc brillant
-                core = max(2, self.rect.w // 12)
-                pygame.draw.rect(glow, (255, 255, 255, int(200 * t)),
-                                 (cx - core // 2, 0, core, self.rect.h))
-            else:
-                cy = self.rect.h // 2
-                for gh, ga in [
-                    (self.rect.h,        int(18 * t)),
-                    (self.rect.h * 3//4, int(35 * t)),
-                    (self.rect.h // 2,   int(60 * t)),
-                    (self.rect.h // 4,   int(100 * t)),
-                    (max(4, self.rect.h // 10), int(180 * t)),
-                ]:
-                    pygame.draw.rect(glow, (*col, ga),
-                                     (0, cy - gh // 2, self.rect.w, gh))
-                core = max(2, self.rect.h // 12)
-                pygame.draw.rect(glow, (255, 255, 255, int(200 * t)),
-                                 (0, cy - core // 2, self.rect.w, core))
-            surf.blit(glow, (sx, sy))
-
-            # ── 2. Sprite centré à proportion naturelle, sans déformation ──
-            if vertical:
-                # Largeur = largeur du beam, hauteur proportionnelle
-                sp_w = self.rect.w
-                sp_h = int(fh * sp_w / max(1, fw))
-                scaled = pygame.transform.scale(raw, (sp_w, sp_h))
-                # teinte
-                tint = pygame.Surface(scaled.get_size())
-                tint.fill(col)
-                scaled.blit(tint, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
-                scaled.set_alpha(alpha)
-                # centré verticalement dans le beam
-                sprite_y = sy + (self.rect.h - sp_h) // 2
-                surf.blit(scaled, (sx, sprite_y))
-            else:
-                # Rotation 90°, hauteur = hauteur du beam, largeur proportionnelle
-                rotated = pygame.transform.rotate(raw, -90)
-                rw, rh = rotated.get_size()
-                sp_h = self.rect.h
-                sp_w = int(rw * sp_h / max(1, rh))
-                scaled = pygame.transform.scale(rotated, (sp_w, sp_h))
-                tint = pygame.Surface(scaled.get_size())
-                tint.fill(col)
-                scaled.blit(tint, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
-                scaled.set_alpha(alpha)
-                sprite_x = sx + (self.rect.w - sp_w) // 2
-                surf.blit(scaled, (sprite_x, sy))
-
+        if vertical:
+            cx = self.rect.w // 2
+            for frac, col in self._LAYERS:
+                lw = max(1, int(self.rect.w * frac))
+                a  = int(220 * t)
+                pygame.draw.rect(s, (*col, a),
+                                 (cx - lw // 2, 0, lw, self.rect.h))
         else:
-            # ── Fallback rectangles (si sprites absents) ────────────────────
-            alpha = int(220 * t)
-            edge_a = int(180 * t)
-            s = pygame.Surface(self.rect.size, pygame.SRCALPHA)
-            s.fill((*col, alpha))
-            if self.rect.w >= self.rect.h:
-                pygame.draw.rect(s, (*Pal.BEAM_EDGE, edge_a), (0, 0, self.rect.w, 4))
-                pygame.draw.rect(s, (*Pal.BEAM_EDGE, edge_a), (0, self.rect.h - 4, self.rect.w, 4))
-            else:
-                pygame.draw.rect(s, (*Pal.BEAM_EDGE, edge_a), (0, 0, 4, self.rect.h))
-                pygame.draw.rect(s, (*Pal.BEAM_EDGE, edge_a), (self.rect.w - 4, 0, 4, self.rect.h))
-            surf.blit(s, (sx, sy))
+            cy = self.rect.h // 2
+            for frac, col in self._LAYERS:
+                lh = max(1, int(self.rect.h * frac))
+                a  = int(220 * t)
+                pygame.draw.rect(s, (*col, a),
+                                 (0, cy - lh // 2, self.rect.w, lh))
+
+        surf.blit(s, (sx, sy))
 
 
 # ---------------------------------------------------------------------------
@@ -563,13 +484,6 @@ class Telegraph:
             border_a = int(120 + 120 * t)
             pygame.draw.rect(s, (*self.color, border_a), (cx, 0, fw, h), 2)
 
-            # Flash blanc dans le cœur quand t > 0.75 → alerte imminente
-            if t > 0.75:
-                flash_a = int(220 * ((t - 0.75) / 0.25) * pulse)
-                core_w = max(2, fw // 4)
-                pygame.draw.rect(s, (255, 255, 255, flash_a),
-                                 (cx + fw // 2 - core_w // 2, 0, core_w, h))
-
             surf.blit(s, (int(x - fw / 2 - pad), int(top)))
 
         elif self.kind == "beam_h":
@@ -593,12 +507,6 @@ class Telegraph:
 
             border_a = int(120 + 120 * t)
             pygame.draw.rect(s, (*self.color, border_a), (0, cy, w, fh), 2)
-
-            if t > 0.75:
-                flash_a = int(220 * ((t - 0.75) / 0.25) * pulse)
-                core_h = max(2, fh // 4)
-                pygame.draw.rect(s, (255, 255, 255, flash_a),
-                                 (0, cy + fh // 2 - core_h // 2, w, core_h))
 
             surf.blit(s, (int(left), int(y - fh / 2 - pad)))
         elif self.kind == "circle":
@@ -2160,7 +2068,6 @@ class Game:
             self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         pygame.display.set_caption("Dreamspawn — Prototype v3")
         self.clock = pygame.time.Clock()
-        _load_beam_sprites()   # charge les frames animées beam_f1..f5.png
 
         self.font_big = pygame.font.SysFont("georgia", 64, bold=True)
         self.font_med = pygame.font.SysFont("georgia", 28, bold=True)
