@@ -128,8 +128,8 @@ class Pal:
     METEOR_TAIL = (255, 120, 80)
     BEAM_FILL  = (255, 245, 220)
     BEAM_EDGE  = (255, 200, 150)
-    TELEGRAPH  = (255, 90, 130)
-    TELEGRAPH_S = (255, 60, 100)  # plus saturé pour les gros tells
+    TELEGRAPH  = (80, 160, 255)
+    TELEGRAPH_S = (60, 130, 255)  # plus saturé pour les gros tells
 
 
 def pal_bg(dim):       return Pal.D_BG if dim == DIM_DREAM else Pal.R_BG
@@ -477,12 +477,12 @@ class Telegraph:
                 pygame.draw.rect(s, (*self.color, ga),
                                  (cx - extra, 0, fw + extra * 2, h))
 
-            # Rectangle principal — monte de presque transparent à dense
-            main_a = int(30 + 180 * t2 * pulse)
+            # Rectangle principal — monte de presque transparent à semi-translucide
+            main_a = int(15 + 90 * t2 * pulse)
             pygame.draw.rect(s, (*self.color, main_a), (cx, 0, fw, h))
 
             # Bords nets du rectangle
-            border_a = int(120 + 120 * t)
+            border_a = int(70 + 90 * t)
             pygame.draw.rect(s, (*self.color, border_a), (cx, 0, fw, h), 2)
 
             surf.blit(s, (int(x - fw / 2 - pad), int(top)))
@@ -503,10 +503,10 @@ class Telegraph:
                 pygame.draw.rect(s, (*self.color, ga),
                                  (0, cy - extra, w, fh + extra * 2))
 
-            main_a = int(30 + 180 * t2 * pulse)
+            main_a = int(15 + 90 * t2 * pulse)
             pygame.draw.rect(s, (*self.color, main_a), (0, cy, w, fh))
 
-            border_a = int(120 + 120 * t)
+            border_a = int(70 + 90 * t)
             pygame.draw.rect(s, (*self.color, border_a), (0, cy, w, fh), 2)
 
             surf.blit(s, (int(left), int(y - fh / 2 - pad)))
