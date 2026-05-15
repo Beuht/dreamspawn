@@ -104,20 +104,26 @@ if exist "Dreamspawn.spec"      del /f /q "Dreamspawn.spec"      >nul 2>&1
 if exist "..\Dreamspawn.spec"   del /f /q "..\Dreamspawn.spec"   >nul 2>&1
 if exist "work"                 rmdir /s /q "work"               >nul 2>&1
 
-::---- 6. Chemins absolus ----------------------------------------
-for %%I in ("%~dp0..\assets")       do set "ASSETS=%%~fI"
-for %%I in ("%~dp0..\assets\music") do set "MUSIC=%%~fI"
-for %%I in ("%~dp0..\assets\sounds") do set "SOUNDS=%%~fI"
-for %%I in ("%~dp0..\src\main.py")  do set "MAIN=%%~fI"
+::---- 6. Chemins absolus (pushd/popd = methode la plus fiable) ---
+pushd "%~dp0.."
+set "ROOT=%CD%"
+popd
+set "ASSETS=%ROOT%\assets"
+set "MUSIC=%ROOT%\assets\music"
+set "SOUNDS=%ROOT%\assets\sounds"
+set "MAIN=%ROOT%\src\main.py"
+set "DIST=%ROOT%\build\dist"
+set "WORK=%ROOT%\build\work"
+set "SPEC=%ROOT%\build"
 
 ::---- 7. Compilation --------------------------------------------
 echo  Compilation en cours...
 echo.
 
 "%PY%" -m PyInstaller --name Dreamspawn --noconfirm --windowed --onefile ^
-    --distpath "%~dp0dist" ^
-    --workpath "%~dp0work" ^
-    --specpath "%~dp0" ^
+    --distpath "%DIST%" ^
+    --workpath "%WORK%" ^
+    --specpath "%SPEC%" ^
     --add-data "%ASSETS%;assets" ^
     --add-data "%MUSIC%;assets\music" ^
     --add-data "%SOUNDS%;assets\sounds" ^
