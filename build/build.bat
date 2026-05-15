@@ -93,15 +93,35 @@ if %errorlevel% neq 0 (
     )
 )
 
-::---- 5. Compilation --------------------------------------------
+::---- 5. Fermer l'exe si ouvert + nettoyer les anciens fichiers -----
+echo  Nettoyage avant compilation...
+
+taskkill /f /im Dreamspawn.exe >nul 2>&1
+timeout /t 1 /nobreak >nul
+
+if exist "dist\Dreamspawn.exe"  del /f /q "dist\Dreamspawn.exe"  >nul 2>&1
+if exist "Dreamspawn.spec"      del /f /q "Dreamspawn.spec"      >nul 2>&1
+if exist "..\Dreamspawn.spec"   del /f /q "..\Dreamspawn.spec"   >nul 2>&1
+if exist "work"                 rmdir /s /q "work"               >nul 2>&1
+
+::---- 6. Chemins absolus ----------------------------------------
+for %%I in ("%~dp0..\assets")       do set "ASSETS=%%~fI"
+for %%I in ("%~dp0..\assets\music") do set "MUSIC=%%~fI"
+for %%I in ("%~dp0..\assets\sounds") do set "SOUNDS=%%~fI"
+for %%I in ("%~dp0..\src\main.py")  do set "MAIN=%%~fI"
+
+::---- 7. Compilation --------------------------------------------
 echo  Compilation en cours...
 echo.
 
-"%PY%" -m PyInstaller --name Dreamspawn --noconfirm --windowed --onefile --distpath dist ^
-    --add-data "..\assets;assets" ^
-    --add-data "..\assets\music;assets\music" ^
-    --add-data "..\assets\sounds;assets\sounds" ^
-    ..\src\main.py
+"%PY%" -m PyInstaller --name Dreamspawn --noconfirm --windowed --onefile ^
+    --distpath "%~dp0dist" ^
+    --workpath "%~dp0work" ^
+    --specpath "%~dp0" ^
+    --add-data "%ASSETS%;assets" ^
+    --add-data "%MUSIC%;assets\music" ^
+    --add-data "%SOUNDS%;assets\sounds" ^
+    "%MAIN%"
 
 if %errorlevel% neq 0 (
     echo.
