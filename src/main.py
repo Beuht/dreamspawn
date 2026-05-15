@@ -2604,26 +2604,30 @@ class Game:
         self.starfield = StarField()
         self.dust = DustField(60, bounds=(-200, 0, 1500, 720))
 
-        # Assets UI barre HP boss
+        # Assets UI barre HP boss (Health_03.png / Health_03_Bar01.png — 128×32 src)
         _base_dir_ui = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+        _HP_SCALE   = 3          # agrandissement pixel-art ×3
+        _FW_SRC     = 128        # largeur source
+        _FH_SRC     = 32         # hauteur source
+        _FILL_X0    = 24         # x de début du fill dans la source
+        _FILL_W_SRC = 84         # largeur du fill dans la source  (x=24..107)
+        _FILL_Y0    = 14         # y de début du fill dans la source (y=14..17)
         def _load_ui(name):
             try:
-                return pygame.image.load(
+                raw = pygame.image.load(
                     os.path.join(_base_dir_ui, "assets", "images", name)
                 ).convert_alpha()
+                return pygame.transform.scale(
+                    raw, (_FW_SRC * _HP_SCALE, _FH_SRC * _HP_SCALE))
             except Exception:
                 return None
-        self._hp_frame = _load_ui("hp_bar_frame.png")   # 382×16
-        self._hp_fill  = _load_ui("hp_bar_fill.png")    # 358×6  (intérieur)
-        # Dimensions lues depuis l'image, fallback si absent
-        if self._hp_frame:
-            self._hp_fw = self._hp_frame.get_width()    # 382
-            self._hp_fh = self._hp_frame.get_height()   # 16
-            self._hp_cap = 11                            # largeur embout
-            self._hp_bar_y1 = 4                         # offset Y barre dans frame
-        else:
-            self._hp_fw, self._hp_fh = 382, 16
-            self._hp_cap, self._hp_bar_y1 = 11, 4
+        self._hp_frame   = _load_ui("hp_bar_frame.png")
+        self._hp_fill    = _load_ui("hp_bar_fill.png")
+        self._hp_fw      = _FW_SRC   * _HP_SCALE   # 384
+        self._hp_fh      = _FH_SRC   * _HP_SCALE   # 96
+        self._hp_fill_x0 = _FILL_X0  * _HP_SCALE   # 72   (début du fill dans surf scalée)
+        self._hp_fill_w  = _FILL_W_SRC * _HP_SCALE  # 252  (largeur totale du fill)
+        self._hp_fill_y0 = _FILL_Y0  * _HP_SCALE    # 42   (offset Y du fill dans surf)
 
         # Background images avec parallax
         _base_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -3583,19 +3587,9 @@ class Game:
     def draw_boss_ui(self):
         if not self.boss: return
 
-        # ── Position centrale ─────────────────────────────────────────────────
-        fw   = self._hp_fw        # 382
-        fh   = self._hp_fh        # 16
-        cap  = self._hp_cap       # 11
-        by1  = self._hp_bar_y1    # 4   (offset Y de la barre dans le frame)
-        fx   = WIDTH // 2 - fw // 2
-        fy   = 28                 # position Y du frame sur l'écran
-
-        # Zone intérieure de la barre (là où on blitte le fill)
-        inner_x = fx + cap + 1
-        inner_y = fy + by1 + 1
-        inner_w = fw - cap * 2 - 2   # 358
-        inner_h = fh - by1 * 2 - 2  # 6
+        # ── Position : centré, le fill y=42 dans la surf scalée doit apparaître à y≈36 ──
+        fx = WIDTH // 2 - self._hp_fw // 2
+        fy = 36 - self._hp_fill_y0   # décale pour que la barre soit en haut d'écran
 
         frac = self.boss.display_bar_fraction()
 
@@ -3607,52 +3601,53 @@ class Game:
             tint = (220, 25, 70) if self.boss.final_form else (185, 50, 110)
         elif self.boss.phase == 4: tint = Pal.BOSS_HP_D
         elif self.boss.phase == 3: tint = (140, 140, 210)
-        else:                       tint = None   # rouge-orange naturel de l'asset
+        else:                       tint = None   # rouge naturel de l'asset
 
-        # ── Remplissage HP ────────────────────────────────────────────────────
-        fill_w = max(0, int(inner_w * frac))
-        if fill_w > 0:
-            if self._hp_fill:
-                # Clip : on ne prend que fill_w pixels de l'asset
-                clip_rect = pygame.Rect(0, 0, fill_w, inner_h)
-                fill_surf = self._hp_fill.subsurface(
-                    clip_rect.clip(self._hp_fill.get_rect()))
-                if tint:
-                    # Teinter via une copie avec BLEND_RGB_MULT
-                    tinted = fill_surf.copy()
-                    t_surf = pygame.Surface(tinted.get_size())
-                    t_surf.fill(tint)
-                    tinted.blit(t_surf, (0, 0),
-                                special_flags=pygame.BLEND_RGB_MULT)
-                    self.screen.blit(tinted, (inner_x, inner_y))
-                else:
-                    self.screen.blit(fill_surf, (inner_x, inner_y))
+        # ── Fill (en dessous du frame) ─────────────────────────────────────────
+        if self._hp_fill and frac > 0:
+            # On clip la surface scalée à : tout ce qui est à gauche de la fin du fill
+            clip_w = self._hp_fill_x0 + max(0, int(self._hp_fill_w * frac))
+            clip_w = min(clip_w, self._hp_fw)
+            if tint:
+                tmp = self._hp_fill.copy()
+                ts  = pygame.Surface(tmp.get_size())
+                ts.fill(tint)
+                tmp.blit(ts, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
+                self.screen.blit(tmp, (fx, fy),
+                                 area=pygame.Rect(0, 0, clip_w, self._hp_fh))
             else:
-                # Fallback procédural si l'asset est absent
-                col = tint if tint else (205, 48, 15)
-                pygame.draw.rect(self.screen, col,
-                                 (inner_x, inner_y, fill_w, inner_h))
+                self.screen.blit(self._hp_fill, (fx, fy),
+                                 area=pygame.Rect(0, 0, clip_w, self._hp_fh))
+        elif not self._hp_fill:
+            # Fallback procédural
+            col = tint if tint else (205, 48, 15)
+            fw = max(0, int(self._hp_fill_w * frac))
+            pygame.draw.rect(self.screen, col,
+                             (fx + self._hp_fill_x0, fy + self._hp_fill_y0, fw, 12))
 
-        # ── Frame doré par-dessus ─────────────────────────────────────────────
+        # ── Frame par-dessus ──────────────────────────────────────────────────
         if self._hp_frame:
             self.screen.blit(self._hp_frame, (fx, fy))
         else:
             pygame.draw.rect(self.screen, (220, 178, 52),
-                             (fx, fy, fw, fh), 2)
+                             (fx, fy + self._hp_fill_y0 - 4,
+                              self._hp_fw, 20), 2)
 
-        # ── Texte label au-dessus ─────────────────────────────────────────────
-        below_y = fy + fh + 3
+        # ── Textes ────────────────────────────────────────────────────────────
+        bar_screen_y = fy + self._hp_fill_y0   # Y réel de la barre sur l'écran
+        below_y = bar_screen_y + 14
+
         name = self.font_sm.render(f"LA LUNE  —  Phase {self.boss.phase}", True, Pal.UI)
-        self.screen.blit(name, name.get_rect(midbottom=(WIDTH // 2, fy - 2)))
+        self.screen.blit(name, name.get_rect(midbottom=(WIDTH // 2, bar_screen_y - 2)))
 
-        # ── Phase 2 : dimension vulnérable ───────────────────────────────────
+        # Phase 2 : dimension vulnérable
         if self.boss.phase == 2 and self.boss.state == "fighting":
             dlbl = "Vulnerable : " + ("REALITE" if self.boss.dim == DIM_REAL else "REVE BRISE")
             dc = pal_accent(self.boss.dim)
             s = self.font_sm.render(dlbl, True, dc)
             self.screen.blit(s, s.get_rect(midtop=(WIDTH // 2, below_y)))
 
-        # ── Derniers Recours ─────────────────────────────────────────────────
+        # Derniers Recours
         if self.boss.last_resort_active:
             t     = self.boss.last_resort_t
             pulse = abs(math.sin(self.frame * 0.18))
@@ -3668,12 +3663,12 @@ class Game:
                 ps = self.font_sm.render(phase_str, True, (255, 150, 80))
                 self.screen.blit(ps, ps.get_rect(midtop=(WIDTH // 2, below_y + 18)))
 
-        # ── Post-DR ───────────────────────────────────────────────────────────
+        # Post-DR
         if self.boss and self.boss.post_dr and not self.boss.last_resort_active:
             def_s = self.font_sm.render("DEFENSE ACCRUE  fleches -50%", True, (255, 100, 80))
             self.screen.blit(def_s, def_s.get_rect(midtop=(WIDTH // 2, below_y)))
 
-        # ── God mode ──────────────────────────────────────────────────────────
+        # God mode
         if self.god_mode:
             gm_s = self.font_sm.render("GOD MODE", True, (100, 255, 120))
             self.screen.blit(gm_s, gm_s.get_rect(topright=(WIDTH - 8, 6)))
