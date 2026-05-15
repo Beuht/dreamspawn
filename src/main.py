@@ -1184,6 +1184,9 @@ class MoonBoss:
 
     def update(self, player, beams, projectiles, rings, telegraphs, particles):
         self.bob_t += 0.04
+        # Boss mort → plus aucune logique IA
+        if self.dead:
+            return
         if self.hit_flash > 0: self.hit_flash -= 1
         if self.stun_timer > 0:
             self.stun_timer -= 1
@@ -1839,15 +1842,15 @@ class MoonBoss:
         return True
 
     def _update_final_blow(self, beams, particles, player):
-        """Cinématique fin divine : 300 frames, main céleste → victoire."""
+        """Cinématique fin — épée divine fend le boss en deux : 300 frames."""
         self.final_blow_t += 1
         t = self.final_blow_t
 
-        # Joueur ET boss invulnérables pendant toute la cinématique
+        # Joueur invulnérable pendant toute la cinématique
         player.invuln = max(player.invuln, 10)
         self.face_state = "open"
 
-        # Vider les projectiles actifs dès le début (frame 1)
+        # Vider les projectiles actifs dès le début
         if t == 1:
             self.game.projectiles_boss.clear()
             self.game.beams.clear()
@@ -1856,83 +1859,140 @@ class MoonBoss:
             self.game.add_shake(18, 50)
             self.game.announce_phase("DERNIERS RECOURS…")
 
-        # ── Phase A (1-60) : charge — boss tremble ──────────────────────────
+        # ── Phase A (1-60) : boss tremble, feu de plus en plus intense ────────
         if t <= 60:
-            shake_amp = min(14.0, t * 0.28)
+            shake_amp = min(16.0, t * 0.32)
             self.x = self._lr_ox + random.uniform(-shake_amp, shake_amp)
             self.y = self._lr_oy + random.uniform(-shake_amp, shake_amp)
-            if t % 5 == 0:
-                burst(particles, self.x, self.y, 20, (255, 60, 20), 9.0, 28, 0.0, 4)
+            if t % 4 == 0:
+                burst(particles, self.x, self.y, 22, (255, 40, 10), 10.0, 32, 0.0, 5)
+            if t % 8 == 0:
+                burst(particles, self.x, self.y, 12, (255, 180, 40), 7.0, 26, 0.0, 4)
             if t % 12 == 0:
-                burst(particles, self.x, self.y, 10, (255, 200, 80), 6.0, 22, 0.0, 3)
-                self.game.add_shake(min(18, t // 4), 8)
+                burst(particles, self.x, self.y, 8, (255, 240, 120), 5.0, 22, 0.0, 3)
+                self.game.add_shake(min(20, t // 3), 8)
 
-        # ── Phase B (61-110) : silence — immobilité totale ──────────────────
+        # ── Phase B (61-110) : silence — le monde se fige ────────────────────
         elif t <= 110:
             self.x = self._lr_ox + random.uniform(-1.5, 1.5)
             self.y = self._lr_oy + random.uniform(-1.5, 1.5)
             if t == 61:
-                self.game.add_shake(6, 12)
+                self.game.add_shake(8, 16)
+            # Quelques particules dorées qui tombent doucement
+            if t % 15 == 0:
+                for _ in range(4):
+                    burst(particles,
+                          self._lr_ox + random.uniform(-60, 60),
+                          self._lr_oy - 80,
+                          2, (255, 240, 180), 1.2, 55, 0.12, 2)
 
-        # ── Phase C (111-165) : lumière divine — musique + rayon descend ─────
+        # ── Phase C (111-165) : l'épée matérialise depuis le ciel ────────────
         elif t <= 165:
             self.x = self._lr_ox
             self.y = self._lr_oy
             if t == 111:
-                self.game.add_shake(10, 20)
-                self.game.start_slowmo(25)
-                self.game._play_music("final_cinematic.mp3", fadein_ms=2000)
-            if t % 10 == 0:
-                for _ in range(8):
-                    burst(particles,
-                          self._lr_ox + random.uniform(-40, 40), -20,
-                          3, (255, 240, 160), 2.0, 90, 0.15, 2)
-            # Main commence à apparaître
-            self.game.divine_hand_visible = True
+                self.game.add_shake(12, 22)
+                self.game.start_slowmo(30)
+                self.game._play_music("final_cinematic.mp3", fadein_ms=1500)
             prog_c = (t - 111) / 54.0
-            self.game.divine_hand_x = int(self._lr_ox - self.game.cam[0])
+            self.game.sword_visible = True
             boss_sy = int(self._lr_oy - self.game.cam[1])
-            self.game.divine_hand_y = int(-150 + prog_c * (boss_sy - 80 + 150))
+            self.game.sword_x = int(self._lr_ox - self.game.cam[0])
+            # Pointe part de y=-180, descend jusqu'à 120px au-dessus du boss
+            self.game.sword_y = int(-180 + prog_c * (boss_sy - 120 + 180))
+            # Particules dorées autour du pilier de lumière
+            if t % 7 == 0:
+                for _ in range(5):
+                    ox = random.uniform(-28, 28)
+                    burst(particles,
+                          self._lr_ox + ox, self._lr_oy - 120,
+                          3, (255, 245, 160), 2.5, 85, 0.1, 2)
 
-        # ── Phase D (166-210) : la main descend vers le boss ─────────────────
+        # ── Phase D (166-200) : l'épée accélère vers le boss ─────────────────
+        elif t <= 200:
+            self.x = self._lr_ox
+            self.y = self._lr_oy
+            # Accélération quadratique
+            prog_d = ((t - 166) / 34.0) ** 2.0
+            boss_sy = int(self._lr_oy - self.game.cam[1])
+            self.game.sword_x = int(self._lr_ox - self.game.cam[0])
+            start_y = boss_sy - 120
+            self.game.sword_y = int(start_y + prog_d * (boss_sy - start_y - 8))
+            if t % 5 == 0:
+                burst(particles, self._lr_ox, self._lr_oy - 30,
+                      10, (200, 230, 255), 5.5, 18, 0.0, 3)
+
+        # ── Phase D2 (201-210) : fissure sur le boss, épée touche ────────────
         elif t <= 210:
             self.x = self._lr_ox
             self.y = self._lr_oy
-            prog_d = (t - 166) / 44.0
-            if t % 6 == 0:
-                burst(particles, self._lr_ox, self._lr_oy - 60,
-                      12, (255, 255, 200), 4.0, 22, 0.0, 3)
+            self.game.boss_crack_active = True
+            prog_d2 = (t - 201) / 9.0
             boss_sy = int(self._lr_oy - self.game.cam[1])
-            self.game.divine_hand_x = int(self._lr_ox - self.game.cam[0])
-            self.game.divine_hand_y = int((boss_sy - 80) + prog_d * 30)
+            self.game.sword_x = int(self._lr_ox - self.game.cam[0])
+            self.game.sword_y = int(boss_sy - 8 + prog_d2 * 16)
+            if t % 3 == 0:
+                self.game.add_shake(4, 4)
+                burst(particles, self._lr_ox, self._lr_oy,
+                      6, (255, 255, 200), 3.0, 12, 0.0, 3)
 
-        # ── Phase E (211-230) : IMPACT ───────────────────────────────────────
+        # ── Phase E (211-230) : IMPACT — le boss se brise ────────────────────
         elif t <= 230:
             self.x = self._lr_ox
             self.y = self._lr_oy
             if t == 211:
-                self.game.divine_hand_visible = False
-                self.game.add_shake(70, 90)
-                self.game.start_slowmo(50)
+                self.game.sword_visible = False
+                self.game.boss_crack_active = False
+                self.game.boss_split_t = 1
+                self.game.boss_split_cx = self._lr_ox
+                self.game.boss_split_cy = self._lr_oy
+                self.game.add_shake(90, 110)
+                self.game.start_slowmo(65)
                 self.game.announce_phase("CE N'EST PAS LE MOMENT")
-                burst(particles, self.x, self.y, 350, (255, 255, 220), 22.0, 120, 0.0, 8)
-                burst(particles, self.x, self.y, 180, (255, 220, 80),  16.0,  90, 0.0, 6)
-                burst(particles, self.x, self.y, 100, (255, 255, 255), 28.0,  60, 0.0, 7)
+                # Cône gauche — fragments qui s'éparpillent vers la gauche
+                for _ in range(220):
+                    angle = random.uniform(math.pi * 0.55, math.pi * 0.95)
+                    spd   = random.uniform(8.0, 30.0)
+                    col   = random.choice([(255, 255, 220), (255, 220, 80), (255, 190, 50)])
+                    vx = math.cos(angle) * spd
+                    vy = -abs(math.sin(angle) * spd * 0.8)
+                    particles.append(Particle(self.x, self.y, vx, vy,
+                                              random.randint(55, 130), col,
+                                              random.randint(4, 9), 0.06))
+                # Cône droit — symétrique
+                for _ in range(220):
+                    angle = random.uniform(math.pi * 0.05, math.pi * 0.45)
+                    spd   = random.uniform(8.0, 30.0)
+                    col   = random.choice([(255, 255, 220), (255, 220, 80), (255, 190, 50)])
+                    vx = math.cos(angle) * spd
+                    vy = -abs(math.sin(angle) * spd * 0.8)
+                    particles.append(Particle(self.x, self.y, vx, vy,
+                                              random.randint(55, 130), col,
+                                              random.randint(4, 9), 0.06))
+                # Explosion centrale blanche
+                burst(particles, self.x, self.y, 160, (255, 255, 255), 34.0, 55, 0.0, 9)
+                burst(particles, self.x, self.y, 90, (200, 230, 255), 24.0, 42, 0.0, 7)
+            if self.game.boss_split_t > 0:
+                self.game.boss_split_t += 1
 
-        # ── Phase F (231-300) : débris + fondu au noir ───────────────────────
+        # ── Phase F (231-300) : les deux moitiés tombent, débris dorés ───────
         elif t <= 300:
             self.x = self._lr_ox
             self.y = self._lr_oy
-            if t < 270 and t % 10 == 0:
+            if self.game.boss_split_t > 0:
+                self.game.boss_split_t += 1
+            if t < 278 and t % 9 == 0:
                 burst(particles,
-                      self.x + random.uniform(-80, 80),
-                      self.y + random.uniform(-60, 60),
-                      25, (255, 210, 80), 7.0, 50, 0.08, 4)
-                self.game.add_shake(max(4, 18 - (t - 231) // 5), 6)
+                      self.x + random.uniform(-75, 75),
+                      self.y + random.uniform(-55, 55),
+                      22, (255, 215, 80), 7.5, 52, 0.08, 4)
+                self.game.add_shake(max(3, 15 - (t - 231) // 6), 5)
 
-        # ── FIN (>300) : désactiver, boss mort ──────────────────────────────
+        # ── FIN (>300) ────────────────────────────────────────────────────────
         else:
-            self.game.divine_hand_visible = False
+            self.game.sword_visible = False
+            self.game.boss_crack_active = False
+            self.game.boss_split_t = 0
             self.final_blow_active = False
             self.dead = True
             self.game.final_blow_hub_t = 1
@@ -2591,10 +2651,14 @@ class Game:
         self.final_blow_dialog_t = 0
         self.victory_timer = 0        # compte à rebours après mort boss → hub
         self.final_blow_hub_t = 0     # idem, piloté par update_moon sans STATE_VICTORY
-        # Main divine
-        self.divine_hand_y = -200
-        self.divine_hand_x = WIDTH // 2
-        self.divine_hand_visible = False
+        # Épée divine
+        self.sword_y = -200
+        self.sword_x = WIDTH // 2
+        self.sword_visible = False
+        self.boss_crack_active = False
+        self.boss_split_t = 0
+        self.boss_split_cx = 0
+        self.boss_split_cy = 0
         self.settings_open = False
         self._settings_path = os.path.join(os.path.expanduser("~"), ".dreamspawn_settings.json")
         self.music_vol = 0.30
@@ -2718,7 +2782,9 @@ class Game:
         self.heal_orbs.clear()
         self.victory_timer = 0
         self.final_blow_hub_t = 0
-        self.divine_hand_visible = False
+        self.sword_visible = False
+        self.boss_crack_active = False
+        self.boss_split_t = 0
         try:
             pygame.mixer.music.fadeout(1500)
         except Exception:
@@ -2756,7 +2822,9 @@ class Game:
         self.state = STATE_MOON
         self.victory_timer = 0
         self.final_blow_hub_t = 0
-        self.divine_hand_visible = False
+        self.sword_visible = False
+        self.boss_crack_active = False
+        self.boss_split_t = 0
         self._play_music("boss_moon.mp3", fadein_ms=2000)
 
     def add_shake(self, strength, frames=10):
@@ -3145,6 +3213,65 @@ class Game:
         if in_arena and self.boss:
             self.boss.draw(self.screen, self.cam, dim)
 
+        # ── Fissure sur le boss (phase D2, t=201-210) ──────────────────────
+        if in_arena and self.boss and self.boss_crack_active:
+            bcx = int(self.boss.x - self.cam[0])
+            bcy = int(self.boss.y + self.boss.float_offset - self.cam[1])
+            r   = self.boss.radius
+            s_crack = pygame.Surface((r * 2 + 8, r * 2 + 8), pygame.SRCALPHA)
+            # Fissure principale — ligne en zigzag verticale au centre
+            pts = [
+                (r + 4,       0),
+                (r + 4 - 6,   r // 3),
+                (r + 4 + 8,   r * 2 // 3),
+                (r + 4 - 4,   r),
+                (r + 4 + 6,   r * 4 // 3),
+                (r + 4,       r * 2 + 8),
+            ]
+            pygame.draw.lines(s_crack, (220, 20, 10, 220), False, pts, 3)
+            pygame.draw.lines(s_crack, (255, 80, 40, 120), False, pts, 6)
+            # Fissures secondaires
+            pygame.draw.line(s_crack, (180, 10, 10, 160),
+                             (r + 4 - 6, r // 3), (r + 4 - 22, r // 3 + 14), 2)
+            pygame.draw.line(s_crack, (180, 10, 10, 160),
+                             (r + 4 + 8, r * 2 // 3), (r + 4 + 24, r * 2 // 3 + 10), 2)
+            self.screen.blit(s_crack, (bcx - r - 4, bcy - r - 4))
+
+        # ── Moitiés du boss fendues (phase E→F, après t=211) ───────────────
+        if in_arena and self.boss_split_t > 0 and self.boss:
+            sp = self.boss_split_t
+            r  = self.boss.radius
+            # Vitesse croissante mais plafonnée
+            vel = min(sp * 0.055, 3.2)
+            left_ox  = int(-sp * vel * 0.95)
+            left_oy  = int( sp * vel * 0.55)
+            right_ox = int( sp * vel * 0.95)
+            right_oy = int( sp * vel * 0.55)
+            bx = int(self.boss_split_cx - self.cam[0])
+            by = int(self.boss_split_cy - self.cam[1])
+            # Fondu après 50 frames
+            fa = max(0, 255 - max(0, sp - 50) * 7)
+            if fa > 0:
+                # Surface partagée pour les deux moitiés (cercle complet)
+                boss_full = pygame.Surface((r * 2 + 10, r * 2 + 10), pygame.SRCALPHA)
+                col_half  = (*Pal.MOON_LIGHT, fa)
+                glow_col  = (*Pal.MOON_GLOW, min(60, fa // 3))
+                pygame.draw.circle(boss_full, glow_col,   (r + 5, r + 5), r + 4)
+                pygame.draw.circle(boss_full, col_half,   (r + 5, r + 5), r)
+                # Ligne de fracture (rouge vif sur la tranche)
+                pygame.draw.line(boss_full, (255, 30, 10, min(255, fa + 60)),
+                                 (r + 5, 0), (r + 5, r * 2 + 10), 4)
+                # Moitié gauche : area x=0 → r+5
+                lx = bx + left_ox - (r + 5)
+                ly = by + left_oy - (r + 5)
+                self.screen.blit(boss_full, (lx, ly),
+                                 area=pygame.Rect(0, 0, r + 5, r * 2 + 10))
+                # Moitié droite : area x=r+5 → fin
+                rx = bx + right_ox
+                ry = by + right_oy - (r + 5)
+                self.screen.blit(boss_full, (rx, ry),
+                                 area=pygame.Rect(r + 5, 0, r + 5, r * 2 + 10))
+
         for tg in self.telegraphs:
             if tg.dim == dim:
                 tg.draw(self.screen, self.cam)
@@ -3289,15 +3416,15 @@ class Game:
                 fa = min(255, int(255 * (t - 231) / 69.0))
                 s.fill((0, 0, 0, fa))
             self.screen.blit(s, (0, 0))
-            # Main divine
-            if self.divine_hand_visible and t >= 111:
+            # Épée divine
+            if self.sword_visible and t >= 111:
                 if t <= 165:
                     prog = (t - 111) / 54.0
                 elif t <= 210:
                     prog = 1.0
                 else:
                     prog = 0.0
-                self._draw_divine_hand(self.divine_hand_x, self.divine_hand_y, prog)
+                self._draw_divine_sword(self.sword_x, self.sword_y, prog)
 
         # (overlay victoire géré dans la boucle principale, pas ici)
 
@@ -3737,72 +3864,177 @@ class Game:
         self.screen.blit(sub, sub.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 60)))
 
 
-    def _draw_divine_hand(self, cx, cy, progress):
-        """Main divine procédurale qui descend du ciel — doigts pointés vers le bas."""
+    def _draw_divine_sword(self, cx, cy, progress):
+        """Épée divine procédurale — pointe vers le bas, descend du ciel.
+        cx, cy = position de la POINTE (extrémité basse, dirigée vers le boss).
+        """
         if progress <= 0:
             return
         s = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        alpha = max(0, min(255, int(220 * progress)))
-        col_skin  = (255, 245, 200, alpha)
-        col_glow  = (255, 230, 120, max(0, alpha - 80))
-        col_inner = (255, 255, 240, min(255, alpha + 30))
+        alpha  = max(0, min(255, int(255 * progress)))
+        scale  = 0.45 + 0.55 * progress
 
-        scale = 0.4 + 0.6 * progress
-        palm_w = int(88 * scale)
-        palm_h = int(66 * scale)
+        # Dimensions
+        blade_len = int(195 * scale)
+        blade_w   = int(30 * scale)
+        cg_w      = int(88 * scale)    # garde / crossguard
+        cg_h      = int(18 * scale)
+        grip_len  = int(62 * scale)
+        grip_w    = int(15 * scale)
+        pommel_r  = int(19 * scale)
 
-        # Rayon de lumière vertical depuis le haut jusqu'à la main
-        beam_w = max(4, int(20 + progress * 80))
-        for by_px in range(0, cy, 6):
-            ba = max(0, int(alpha * 0.45 * (1.0 - by_px / max(1, cy))))
-            pygame.draw.rect(s, (255, 240, 160, ba),
-                             (cx - beam_w // 2, by_px, beam_w, 6))
+        # Positions clés (tout part de cy = pointe, monte vers le haut)
+        tip_y      = cy
+        cg_y       = cy - blade_len               # pied de la garde
+        grip_top   = cg_y - cg_h - grip_len       # sommet de la poignée
+        pommel_cy  = grip_top - pommel_r           # centre du pommeau
 
-        # Aura dorée derrière la main
-        for ra, aa in [(palm_w + 30, 60), (palm_w + 18, 90), (palm_w + 6, 110)]:
-            a2 = max(0, min(255, int(aa * progress)))
-            pygame.draw.circle(s, (255, 220, 100, a2),
-                               (cx, cy + palm_h // 2),
-                               int(ra * scale), max(1, int(4 * scale)))
+        # ── PILIER DE LUMIÈRE (du haut de l'écran jusqu'à la pointe) ─────────
+        pillar_w = max(6, int(72 * progress))
+        core_w   = max(3, int(18 * progress))
+        for by_px in range(0, cy + 1, 8):
+            frac = 1.0 - by_px / max(1, cy)
+            ba   = max(0, int(alpha * 0.32 * frac))
+            pygame.draw.rect(s, (190, 215, 255, ba),
+                             (cx - pillar_w // 2, by_px, pillar_w, 8))
+        for by_px in range(0, cy + 1, 6):
+            frac = 1.0 - by_px / max(1, cy)
+            ba   = max(0, int(alpha * 0.60 * frac))
+            pygame.draw.rect(s, (255, 255, 255, ba),
+                             (cx - core_w // 2, by_px, core_w, 6))
 
-        # Doigts (pointés vers le bas)
-        finger_cfgs = [(-38, 48, 14), (-19, 58, 15), (0, 62, 15), (19, 56, 14), (36, 44, 12)]
-        for fx_off, fh_base, fw_base in finger_cfgs:
-            fw = max(2, int(fw_base * scale))
-            fh = max(4, int(fh_base * scale))
-            fx = cx + int(fx_off * scale) - fw // 2
-            fy = cy + palm_h  # sous la paume
-            pygame.draw.rect(s, col_skin,
-                             pygame.Rect(fx, fy, fw, fh),
-                             border_radius=max(1, int(5 * scale)))
-            pygame.draw.rect(s, col_inner,
-                             pygame.Rect(fx + max(1, fw // 4), fy + 2,
-                                         max(1, fw // 2), max(2, fh // 3)),
-                             border_radius=max(1, int(3 * scale)))
+        # ── AURA BLEUE-BLANCHE autour de la lame ──────────────────────────────
+        for extra, aa in [(44, 28), (28, 50), (14, 75)]:
+            aw = blade_w // 2 + int(extra * scale)
+            apts = [
+                (cx - aw, cg_y),
+                (cx + aw, cg_y),
+                (cx + max(2, int(3 * scale)), tip_y),
+                (cx - max(2, int(3 * scale)), tip_y),
+            ]
+            pygame.draw.polygon(s, (175, 210, 255, max(0, int(aa * progress))), apts)
 
-        # Paume
-        palm_rect = pygame.Rect(cx - palm_w // 2, cy, palm_w, palm_h)
-        pygame.draw.rect(s, col_skin, palm_rect,
-                         border_radius=max(2, int(10 * scale)))
-        pygame.draw.rect(s, col_inner,
-                         pygame.Rect(cx - palm_w // 3, cy + int(4 * scale),
-                                     palm_w * 2 // 3, int(12 * scale)),
-                         border_radius=max(1, int(4 * scale)))
-        pygame.draw.rect(s, col_glow, palm_rect, max(1, int(2 * scale)),
-                         border_radius=max(2, int(10 * scale)))
+        # ── LAME ──────────────────────────────────────────────────────────────
+        # Silhouette principale (argent froid)
+        blade_pts = [
+            (cx - blade_w // 2, cg_y),
+            (cx + blade_w // 2, cg_y),
+            (cx + max(1, int(2 * scale)), tip_y - int(6 * scale)),
+            (cx,                           tip_y),
+            (cx - max(1, int(2 * scale)), tip_y - int(6 * scale)),
+        ]
+        pygame.draw.polygon(s, (195, 208, 228, min(255, alpha)), blade_pts)
 
-        # Rayons de lumière (12, tous les 30°)
-        for angle_deg in range(0, 360, 30):
-            angle = math.radians(angle_deg)
-            r1 = int((palm_w // 2 + 10) * scale)
-            r2 = int((palm_w // 2 + 30 + 10 * math.cos(angle * 3)) * scale)
-            x1 = cx + int(r1 * math.cos(angle))
-            y1 = cy + palm_h // 2 + int(r1 * math.sin(angle))
-            x2 = cx + int(r2 * math.cos(angle))
-            y2 = cy + palm_h // 2 + int(r2 * math.sin(angle))
-            ra2 = max(0, min(255, int(80 * progress)))
-            pygame.draw.line(s, (255, 240, 150, ra2), (x1, y1), (x2, y2),
+        # Reflet central brillant (fuller / gorge)
+        cen_pts = [
+            (cx - max(1, blade_w // 7), cg_y),
+            (cx + max(1, blade_w // 7), cg_y),
+            (cx + max(1, int(1 * scale)), tip_y - int(10 * scale)),
+            (cx - max(1, int(1 * scale)), tip_y - int(10 * scale)),
+        ]
+        pygame.draw.polygon(s, (255, 255, 255, min(255, alpha)), cen_pts)
+
+        # Bords tranchants (éclat blanc-bleu)
+        pygame.draw.line(s, (235, 248, 255, alpha),
+                         (cx - blade_w // 2, cg_y), (cx, tip_y),
+                         max(1, int(2 * scale)))
+        pygame.draw.line(s, (235, 248, 255, alpha),
+                         (cx + blade_w // 2, cg_y), (cx, tip_y),
+                         max(1, int(2 * scale)))
+
+        # Rainure centrale (fuller) — légère ombre longitudinale
+        mid_y = (cg_y + tip_y) // 2
+        pygame.draw.line(s, (148, 160, 185, min(175, alpha)),
+                         (cx, cg_y + int(10 * scale)), (cx, mid_y + int(12 * scale)),
+                         max(1, int(3 * scale)))
+
+        # ── GARDE (crossguard) ────────────────────────────────────────────────
+        cg_rect = pygame.Rect(cx - cg_w // 2, cg_y - cg_h // 2, cg_w, cg_h)
+        # Corps doré
+        pygame.draw.rect(s, (215, 170, 45, alpha), cg_rect,
+                         border_radius=max(2, int(6 * scale)))
+        # Reflet supérieur
+        pygame.draw.rect(s, (255, 235, 125, min(255, alpha)),
+                         pygame.Rect(cx - cg_w // 2 + 5, cg_y - cg_h // 2 + 2,
+                                     cg_w - 10, max(2, cg_h // 3)),
+                         border_radius=max(1, int(3 * scale)))
+        # Ombre inférieure
+        pygame.draw.rect(s, (135, 95, 18, min(200, alpha)),
+                         pygame.Rect(cx - cg_w // 2 + 3, cg_y + cg_h // 5,
+                                     cg_w - 6, max(2, cg_h // 3)),
+                         border_radius=max(1, int(2 * scale)))
+        # Bordure lumineuse
+        pygame.draw.rect(s, (255, 218, 80, alpha), cg_rect,
+                         max(1, int(2 * scale)),
+                         border_radius=max(2, int(6 * scale)))
+        # Gemmes violettes aux extrémités
+        for gx in [cx - cg_w // 2 + int(9 * scale),
+                   cx + cg_w // 2 - int(9 * scale)]:
+            gr = max(3, int(7 * scale))
+            pygame.draw.circle(s, (155, 55, 220, alpha), (gx, cg_y), gr)
+            pygame.draw.circle(s, (220, 150, 255, min(190, alpha)),
+                               (gx - max(1, gr // 3), cg_y - max(1, gr // 3)),
+                               max(1, gr // 3))
+
+        # ── POIGNÉE (grip) ─────────────────────────────────────────────────────
+        grip_rect = pygame.Rect(cx - grip_w // 2, grip_top, grip_w, grip_len)
+        # Cuir sombre
+        pygame.draw.rect(s, (42, 28, 18, alpha), grip_rect,
+                         border_radius=max(2, int(4 * scale)))
+        # Ligatures (enroulements de cuir)
+        for i in range(6):
+            bind_y = grip_top + int(grip_len * (i + 0.5) / 6)
+            pygame.draw.line(s, (75, 50, 28, min(200, alpha)),
+                             (cx - grip_w // 2 - 1, bind_y),
+                             (cx + grip_w // 2 + 1, bind_y),
                              max(1, int(2 * scale)))
+        # Reflet sur la tranche
+        pygame.draw.rect(s, (65, 45, 30, min(155, alpha)),
+                         pygame.Rect(cx - grip_w // 4, grip_top + 2,
+                                     grip_w // 2, grip_len - 4),
+                         border_radius=max(1, int(3 * scale)))
+
+        # ── POMMEAU ────────────────────────────────────────────────────────────
+        pcx, pcy = cx, pommel_cy
+        # Auréole dorée
+        for pr_extra, pa in [(16, 40), (10, 65), (4, 95)]:
+            pr = pommel_r + int(pr_extra * scale)
+            pygame.draw.circle(s, (255, 215, 80, max(0, int(pa * progress))),
+                               (pcx, pcy), pr, max(1, int(3 * scale)))
+        # Corps
+        pygame.draw.circle(s, (215, 170, 45, alpha), (pcx, pcy), pommel_r)
+        # Spéculaire
+        hl_r = max(2, pommel_r // 3)
+        pygame.draw.circle(s, (255, 245, 165, min(230, alpha)),
+                           (pcx - hl_r, pcy - hl_r), hl_r)
+        # Contour
+        pygame.draw.circle(s, (255, 215, 80, alpha), (pcx, pcy), pommel_r, 2)
+
+        # ── RAYONS DE LUMIÈRE depuis la garde ─────────────────────────────────
+        ra_alpha = max(0, min(255, int(72 * progress)))
+        for angle_deg in range(0, 360, 22):
+            angle = math.radians(angle_deg)
+            r1 = int((cg_w // 2 + 6) * scale)
+            r2 = int((cg_w // 2 + 30 + 7 * math.cos(angle * 5)) * scale)
+            x1 = cx + int(r1 * math.cos(angle))
+            y1 = cg_y + int(r1 * math.sin(angle))
+            x2 = cx + int(r2 * math.cos(angle))
+            y2 = cg_y + int(r2 * math.sin(angle))
+            pygame.draw.line(s, (255, 242, 130, ra_alpha),
+                             (x1, y1), (x2, y2),
+                             max(1, int(2 * scale)))
+
+        # ── ÉTINCELLES le long de la lame ─────────────────────────────────────
+        if progress > 0.25:
+            for _ in range(4):
+                t_frac = random.uniform(0.05, 0.92)
+                off_x  = random.uniform(-blade_w * t_frac / 2,
+                                         blade_w * t_frac / 2)
+                sp_x   = int(cx + off_x)
+                sp_y   = cg_y + int((tip_y - cg_y) * t_frac)
+                sp_r   = max(1, int(random.uniform(1.5, 3.5) * scale))
+                sp_a   = max(0, min(255, int(random.uniform(170, 255) * progress)))
+                pygame.draw.circle(s, (255, 255, 195, sp_a), (sp_x, sp_y), sp_r)
 
         self.screen.blit(s, (0, 0))
 
