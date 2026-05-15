@@ -3808,33 +3808,63 @@ class Game:
         self.screen.blit(s, (0, 0))
 
     def _draw_victory_overlay(self):
-        """Fond noir, texte: blanc (fade-in) → doré (transition). 5 sec → hub."""
+        """Écran fin soigné : bloom blanc → doré vif sur noir. 5 sec → hub."""
         t = self.final_blow_hub_t
-
-        # Fond entièrement noir (la cinématique s'est déjà chargée du fondu)
         self.screen.fill((0, 0, 0))
 
-        # ── Opacité du texte : fade-in sur les 50 premières frames ──────────
-        txt_a = min(255, int(255 * t / 50))
+        # ── Fonctions utilitaires ─────────────────────────────────────────
+        def easeout(x):
+            x = max(0.0, min(1.0, x))
+            return 1.0 - (1.0 - x) ** 3
 
-        # ── Couleur : interpolation blanc → doré sur les frames 1-120 ───────
-        lerp = min(1.0, t / 120.0)
+        def lc(a, b, k):
+            return tuple(int(a[i] * (1 - k) + b[i] * k) for i in range(3))
 
-        def lc(c1, c2, k):
-            return tuple(int(c1[i] + (c2[i] - c1[i]) * k) for i in range(3))
+        # ── Paramètres de progression ─────────────────────────────────────
+        fade = easeout(t / 40.0)          # opacité globale 0→1 en 40 frames
+        lerp = easeout(t / 90.0)          # couleur blanc→doré en 90 frames
+        txt_a = int(255 * fade)
 
-        col1  = lc((255, 255, 255), (255, 215,  80), lerp)
-        col2  = lc((255, 255, 255), (255, 190,  50), lerp)
-        col_s = lc((255, 255, 255), (255, 200,  60), lerp)
-        col_b = lc((200, 200, 200), (200, 175, 100), lerp)
+        # Dorés vifs et lumineux
+        GOLD1  = (255, 248, 130)
+        GOLD2  = (255, 232, 100)
+        GOLD_S = (255, 242, 115)
+        GOLD_B = (220, 198,  95)
 
-        # ── Séparateurs qui s'élargissent ─────────────────────────────────
-        sep_w = int(60 + 360 * min(1.0, t / 80.0))
-        sep_a = min(200, txt_a)
-        sep_s = pygame.Surface((sep_w, 2), pygame.SRCALPHA)
-        sep_s.fill((*col_s, sep_a))
-        self.screen.blit(sep_s, sep_s.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 76)))
-        self.screen.blit(sep_s, sep_s.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 76)))
+        col1  = lc((255, 255, 255), GOLD1,  lerp)
+        col2  = lc((255, 255, 255), GOLD2,  lerp)
+        col_s = lc((255, 255, 255), GOLD_S, lerp)
+        col_b = lc((210, 210, 210), GOLD_B, lerp)
+
+        cy = HEIGHT // 2 - 11   # centre vertical du bloc texte
+
+        # ── Halo lumineux derrière le texte ──────────────────────────────
+        # Bloom blanc intense au début, se transforme en halo doré doux
+        glow_w = max(0.0, 1.0 - lerp * 1.4)   # bloom blanc disparaît
+        glow_g = lerp * 0.45                    # halo doré apparaît
+        ov = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        for w, h, am in [(820, 180, 0.20), (600, 110, 0.30), (420, 65, 0.45)]:
+            ga = int(140 * fade * glow_w * am)
+            if ga > 1:
+                gs = pygame.Surface((w, h), pygame.SRCALPHA)
+                gs.fill((255, 252, 225, ga))
+                ov.blit(gs, gs.get_rect(center=(WIDTH // 2, cy)))
+        for w, h, am in [(700, 130, 0.14), (500, 75, 0.22)]:
+            ga = int(255 * fade * glow_g * am)
+            if ga > 1:
+                gs = pygame.Surface((w, h), pygame.SRCALPHA)
+                gs.fill((*GOLD_S, ga))
+                ov.blit(gs, gs.get_rect(center=(WIDTH // 2, cy)))
+        self.screen.blit(ov, (0, 0))
+
+        # ── Séparateurs qui s'élargissent depuis le centre ────────────────
+        sep_w = int(easeout(min(1.0, t / 55.0)) * 370)
+        sep_a = int(220 * fade)
+        if sep_w > 4 and sep_a > 0:
+            for sep_y in (HEIGHT // 2 - 78, HEIGHT // 2 + 78):
+                ss = pygame.Surface((sep_w, 2), pygame.SRCALPHA)
+                ss.fill((*col_s, sep_a))
+                self.screen.blit(ss, ss.get_rect(center=(WIDTH // 2, sep_y)))
 
         # ── Texte principal ───────────────────────────────────────────────
         line1 = self.font_big.render("CE N'EST PAS", True, col1)
@@ -3845,9 +3875,9 @@ class Game:
         line2.set_alpha(txt_a)
         self.screen.blit(line2, line2.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 22)))
 
-        # ── Sous-titre + compte à rebours (après 100 frames) ─────────────
+        # ── Sous-titre + compte à rebours ─────────────────────────────────
         if t > 100:
-            sub_a = min(160, int(160 * (t - 100) / 40))
+            sub_a = min(155, int(155 * (t - 100) / 45))
             secs = max(1, (300 - t) // 60 + 1)
             sub = self.font_med.render(
                 f"Retour au sanctuaire dans {secs}s…    R — maintenant",
