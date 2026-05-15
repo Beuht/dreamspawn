@@ -2604,30 +2604,37 @@ class Game:
         self.starfield = StarField()
         self.dust = DustField(60, bounds=(-200, 0, 1500, 720))
 
-        # Assets UI barre HP boss (Health_03.png / Health_03_Bar01.png — 128×32 src)
+        # ── Assets UI barre HP ────────────────────────────────────────────────
         _base_dir_ui = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-        _HP_SCALE   = 3          # agrandissement pixel-art ×3
-        _FW_SRC     = 128        # largeur source
-        _FH_SRC     = 32         # hauteur source
-        _FILL_X0    = 24         # x de début du fill dans la source
-        _FILL_W_SRC = 84         # largeur du fill dans la source  (x=24..107)
-        _FILL_Y0    = 14         # y de début du fill dans la source (y=14..17)
-        def _load_ui(name):
+        def _load_ui(name, scale):
             try:
                 raw = pygame.image.load(
                     os.path.join(_base_dir_ui, "assets", "images", name)
                 ).convert_alpha()
-                return pygame.transform.scale(
-                    raw, (_FW_SRC * _HP_SCALE, _FH_SRC * _HP_SCALE))
+                sw, sh = raw.get_width() * scale, raw.get_height() * scale
+                return pygame.transform.scale(raw, (sw, sh))
             except Exception:
                 return None
-        self._hp_frame   = _load_ui("hp_bar_frame.png")
-        self._hp_fill    = _load_ui("hp_bar_fill.png")
-        self._hp_fw      = _FW_SRC   * _HP_SCALE   # 384
-        self._hp_fh      = _FH_SRC   * _HP_SCALE   # 96
-        self._hp_fill_x0 = _FILL_X0  * _HP_SCALE   # 72   (début du fill dans surf scalée)
-        self._hp_fill_w  = _FILL_W_SRC * _HP_SCALE  # 252  (largeur totale du fill)
-        self._hp_fill_y0 = _FILL_Y0  * _HP_SCALE    # 42   (offset Y du fill dans surf)
+
+        # Boss HP bar  (Health_03 — 128×32 src, fill x=24..107 y=14..17)
+        _BS = 2                                      # boss scale ×2
+        self._hp_frame    = _load_ui("hp_bar_frame.png", _BS)
+        self._hp_fill     = _load_ui("hp_bar_fill.png",  _BS)
+        self._hp_fw       = 128 * _BS                # 256
+        self._hp_fh       = 32  * _BS                # 64
+        self._hp_fill_x0  = 24  * _BS                # 48
+        self._hp_fill_w   = 84  * _BS                # 168
+        self._hp_fill_y0  = 14  * _BS                # 28  (y dans surf scalée)
+
+        # Hero HP bar  (Health_01 — 128×32 src, fill x=32..121 y=10..13)
+        _HS = 2                                      # hero scale ×2
+        self._hero_frame   = _load_ui("hp_hero_frame.png", _HS)
+        self._hero_fill    = _load_ui("hp_hero_fill.png",  _HS)
+        self._hero_fw      = 128 * _HS               # 256
+        self._hero_fh      = 32  * _HS               # 64
+        self._hero_fill_x0 = 32  * _HS               # 64
+        self._hero_fill_w  = 90  * _HS               # 180
+        self._hero_fill_y0 = 10  * _HS               # 20  (y dans surf scalée)
 
         # Background images avec parallax
         _base_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -3528,14 +3535,34 @@ class Game:
             self.screen.blit(w, w.get_rect(midbottom=(WIDTH // 2, HEIGHT - 6)))
 
     def draw_hud(self):
-        x, y = 24, 20
-        w = 240; h = 22
-        pygame.draw.rect(self.screen, Pal.HP_BG, (x, y, w, h), border_radius=6)
-        frac = max(0.0, self.player.hp / self.player.max_hp)
-        pygame.draw.rect(self.screen, Pal.HP_FILL, (x, y, int(w * frac), h), border_radius=6)
-        pygame.draw.rect(self.screen, Pal.UI, (x, y, w, h), 2, border_radius=6)
-        hp_lbl = self.font_sm.render(f"HP  {self.player.hp}/{self.player.max_hp}", True, Pal.UI)
-        self.screen.blit(hp_lbl, (x + 8, y - 1))
+        # ── Barre HP héros (asset pixel-art) ─────────────────────────────────
+        frac  = max(0.0, self.player.hp / self.player.max_hp)
+        hfx   = 8                            # x gauche du frame
+        hfy   = 8                            # y haut du frame  (bar à y=8+20=28)
+        hbar_screen_y = hfy + self._hero_fill_y0   # y réel de la barre = 28
+
+        # Fill (en dessous du frame)
+        if self._hero_fill and frac > 0:
+            clip_w = self._hero_fill_x0 + max(0, int(self._hero_fill_w * frac))
+            clip_w = min(clip_w, self._hero_fw)
+            self.screen.blit(self._hero_fill, (hfx, hfy),
+                             area=pygame.Rect(0, 0, clip_w, self._hero_fh))
+        elif not self._hero_fill:
+            fw2 = max(0, int(self._hero_fill_w * frac))
+            pygame.draw.rect(self.screen, Pal.HP_FILL,
+                             (hfx + self._hero_fill_x0, hbar_screen_y, fw2, 8))
+
+        # Frame par-dessus
+        if self._hero_frame:
+            self.screen.blit(self._hero_frame, (hfx, hfy))
+        else:
+            pygame.draw.rect(self.screen, Pal.UI,
+                             (hfx, hbar_screen_y - 2, self._hero_fw, 12), 2)
+
+        # Label HP
+        hp_lbl = self.font_sm.render(
+            f"{self.player.hp}/{self.player.max_hp}", True, Pal.UI)
+        self.screen.blit(hp_lbl, (hfx + self._hero_fill_x0 + 4, hbar_screen_y - 18))
 
         # Bouclier (shield) — barre verte sous la barre HP
         if self.player.shield > 0:
@@ -3587,9 +3614,9 @@ class Game:
     def draw_boss_ui(self):
         if not self.boss: return
 
-        # ── Position : centré, le fill y=42 dans la surf scalée doit apparaître à y≈36 ──
+        # ── Position : centré, bar target y=36 ───────────────────────────────
         fx = WIDTH // 2 - self._hp_fw // 2
-        fy = 36 - self._hp_fill_y0   # décale pour que la barre soit en haut d'écran
+        fy = 36 - self._hp_fill_y0   # fill_y0=28 → fy=8, frame y=8..72
 
         frac = self.boss.display_bar_fraction()
 
