@@ -1192,6 +1192,9 @@ class MoonBoss:
         # Pause entre les animations phase 5
         if self.pause_timer > 0:
             self.pause_timer -= 1
+            # Joueur invulnérable pendant les pauses (aucun dégât pendant les animations)
+            if self.game.player:
+                self.game.player.invuln = max(self.game.player.invuln, 10)
             if self.pause_timer == 0 and self.post_dr and not self.final_blow_active:
                 self.game._play_music("boss_moon_p2.mp3")
             return
@@ -1836,52 +1839,103 @@ class MoonBoss:
         return True
 
     def _update_final_blow(self, beams, particles, player):
-        """Cinématique fin divine : lumière divine → victoire."""
+        """Cinématique fin divine : 300 frames, main céleste → victoire."""
         self.final_blow_t += 1
         t = self.final_blow_t
+
+        # Joueur ET boss invulnérables pendant toute la cinématique
         player.invuln = max(player.invuln, 10)
         self.face_state = "open"
 
-        # Phase A (1-40) : charge DR, tremblements
-        if t < 40:
-            shake_amp = min(6.0, t * 0.2)
+        # Vider les projectiles actifs dès le début (frame 1)
+        if t == 1:
+            self.game.projectiles_boss.clear()
+            self.game.beams.clear()
+            self.game.rings.clear()
+            self.game.telegraphs.clear()
+            self.game.add_shake(18, 50)
+            self.game.announce_phase("DERNIERS RECOURS…")
+
+        # ── Phase A (1-60) : charge — boss tremble ──────────────────────────
+        if t <= 60:
+            shake_amp = min(14.0, t * 0.28)
             self.x = self._lr_ox + random.uniform(-shake_amp, shake_amp)
             self.y = self._lr_oy + random.uniform(-shake_amp, shake_amp)
-            if t % 6 == 0:
-                burst(particles, self.x, self.y, 15, (255, 60, 20), 6.0, 20, 0.0, 4)
-            if t == 1:
-                self.game.add_shake(20, 40)
-                self.game.announce_phase("DERNIERS RECOURS…")
+            if t % 5 == 0:
+                burst(particles, self.x, self.y, 20, (255, 60, 20), 9.0, 28, 0.0, 4)
+            if t % 12 == 0:
+                burst(particles, self.x, self.y, 10, (255, 200, 80), 6.0, 22, 0.0, 3)
+                self.game.add_shake(min(18, t // 4), 8)
 
-        # Phase B (40-80) : flash divin croissant
-        elif t < 80:
-            self.x = self._lr_ox
-            self.y = self._lr_oy
-            if t == 40:
-                self.game.add_shake(40, 50)
-                self.game.start_slowmo(30)
-                burst(particles, self.x, self.y, 200, (255, 255, 255), 18.0, 80, 0.0, 7)
-                burst(particles, self.x, self.y, 80, (200, 240, 255), 12.0, 60, 0.0, 5)
+        # ── Phase B (61-110) : silence — immobilité totale ──────────────────
+        elif t <= 110:
+            self.x = self._lr_ox + random.uniform(-1.5, 1.5)
+            self.y = self._lr_oy + random.uniform(-1.5, 1.5)
+            if t == 61:
+                self.game.add_shake(6, 12)
 
-        # Phase C (80-130) : explosion finale
-        elif t < 130:
+        # ── Phase C (111-165) : lumière divine — musique + rayon descend ─────
+        elif t <= 165:
             self.x = self._lr_ox
             self.y = self._lr_oy
             if t == 111:
+                self.game.add_shake(10, 20)
+                self.game.start_slowmo(25)
                 self.game._play_music("final_cinematic.mp3", fadein_ms=2000)
-            if t == 80:
-                burst(particles, self.x, self.y, 300, (255, 255, 200), 20.0, 100, 0.0, 8)
-                burst(particles, self.x, self.y, 150, (255, 180, 80), 15.0, 80, 0.0, 6)
-                burst(particles, self.x, self.y, 80, (255, 80, 20), 10.0, 60, 0.0, 5)
-                self.game.add_shake(60, 80)
-                self.game.start_slowmo(60)
-                self.game.announce_phase("CE N'EST PAS LE MOMENT")
+            if t % 10 == 0:
+                for _ in range(8):
+                    burst(particles,
+                          self._lr_ox + random.uniform(-40, 40), -20,
+                          3, (255, 240, 160), 2.0, 90, 0.15, 2)
+            # Main commence à apparaître
+            self.game.divine_hand_visible = True
+            prog_c = (t - 111) / 54.0
+            self.game.divine_hand_x = int(self._lr_ox - self.game.cam[0])
+            boss_sy = int(self._lr_oy - self.game.cam[1])
+            self.game.divine_hand_y = int(-150 + prog_c * (boss_sy - 80 + 150))
 
-        # Phase D (130+) : victoire — désactiver final_blow avant dead=True
-        elif t >= 130:
+        # ── Phase D (166-210) : la main descend vers le boss ─────────────────
+        elif t <= 210:
+            self.x = self._lr_ox
+            self.y = self._lr_oy
+            prog_d = (t - 166) / 44.0
+            if t % 6 == 0:
+                burst(particles, self._lr_ox, self._lr_oy - 60,
+                      12, (255, 255, 200), 4.0, 22, 0.0, 3)
+            boss_sy = int(self._lr_oy - self.game.cam[1])
+            self.game.divine_hand_x = int(self._lr_ox - self.game.cam[0])
+            self.game.divine_hand_y = int((boss_sy - 80) + prog_d * 30)
+
+        # ── Phase E (211-230) : IMPACT ───────────────────────────────────────
+        elif t <= 230:
+            self.x = self._lr_ox
+            self.y = self._lr_oy
+            if t == 211:
+                self.game.divine_hand_visible = False
+                self.game.add_shake(70, 90)
+                self.game.start_slowmo(50)
+                self.game.announce_phase("CE N'EST PAS LE MOMENT")
+                burst(particles, self.x, self.y, 350, (255, 255, 220), 22.0, 120, 0.0, 8)
+                burst(particles, self.x, self.y, 180, (255, 220, 80),  16.0,  90, 0.0, 6)
+                burst(particles, self.x, self.y, 100, (255, 255, 255), 28.0,  60, 0.0, 7)
+
+        # ── Phase F (231-300) : débris + fondu au noir ───────────────────────
+        elif t <= 300:
+            self.x = self._lr_ox
+            self.y = self._lr_oy
+            if t < 270 and t % 10 == 0:
+                burst(particles,
+                      self.x + random.uniform(-80, 80),
+                      self.y + random.uniform(-60, 60),
+                      25, (255, 210, 80), 7.0, 50, 0.08, 4)
+                self.game.add_shake(max(4, 18 - (t - 231) // 5), 6)
+
+        # ── FIN (>300) : désactiver, boss mort ──────────────────────────────
+        else:
+            self.game.divine_hand_visible = False
             self.final_blow_active = False
             self.dead = True
-            self.game.final_blow_dialog_t = 1
+            self.game.final_blow_hub_t = 1
 
     def _update_pre_dr(self, player):
         """Dialogue animé du boss avant Derniers Recours (~120 frames)."""
@@ -2001,8 +2055,8 @@ class MoonBoss:
                 int(self.ax_right - self.ax_left),
                 80
             )
-            beams.append(Beam(rect_h, DIM_REAL, life=60, dmg=6,
-                               hits_any_dim=True, red=True, once=True))
+            beams.append(Beam(rect_h, DIM_REAL, life=60, dmg=0,
+                               hits_any_dim=True, red=True, once=False))
 
         # ── PHASE F : AFTERMATH court (t 186-260) ──
         elif t < 260:
@@ -2529,7 +2583,12 @@ class Game:
         self.pre_dr_zoom_t = 0
         self.post_dr_dialog_t = 0
         self.final_blow_dialog_t = 0
-        self.victory_timer = 0   # compte à rebours avant retour au hub (5 sec)
+        self.victory_timer = 0        # compte à rebours après mort boss → hub
+        self.final_blow_hub_t = 0     # idem, piloté par update_moon sans STATE_VICTORY
+        # Main divine
+        self.divine_hand_y = -200
+        self.divine_hand_x = WIDTH // 2
+        self.divine_hand_visible = False
         self.settings_open = False
         self._settings_path = os.path.join(os.path.expanduser("~"), ".dreamspawn_settings.json")
         self.music_vol = 0.30
@@ -2652,6 +2711,8 @@ class Game:
         self.damage_numbers.clear()
         self.heal_orbs.clear()
         self.victory_timer = 0
+        self.final_blow_hub_t = 0
+        self.divine_hand_visible = False
         try:
             pygame.mixer.music.fadeout(1500)
         except Exception:
@@ -2688,6 +2749,8 @@ class Game:
         self.cam = [0, 0]
         self.state = STATE_MOON
         self.victory_timer = 0
+        self.final_blow_hub_t = 0
+        self.divine_hand_visible = False
         self._play_music("boss_moon.mp3", fadein_ms=2000)
 
     def add_shake(self, strength, frames=10):
@@ -2765,6 +2828,8 @@ class Game:
                             self.p_press_times = []
                     elif event.key == pygame.K_r and self.state in (STATE_GAMEOVER, STATE_VICTORY):
                         self.start_hub()
+                    elif event.key == pygame.K_r and self.state == STATE_MOON and self.final_blow_hub_t > 0:
+                        self.start_hub()
                     elif event.key == pygame.K_SPACE and self.state in (STATE_HUB, STATE_MOON):
                         self.player.press_jump(self.particles)
                     elif event.key in (pygame.K_a, pygame.K_LSHIFT, pygame.K_RSHIFT) and self.state in (STATE_HUB, STATE_MOON):
@@ -2820,13 +2885,9 @@ class Game:
                 self.draw_world(in_arena=(self.boss is not None))
                 self.draw_gameover()
             elif self.state == STATE_VICTORY:
-                if self.victory_timer > 0:
-                    self.victory_timer += 1
-                    if self.victory_timer >= 300:   # 5 secondes → retour au hub
-                        self.start_hub()
-                        continue
-                self.draw_world(in_arena=True)
-                self.draw_victory()
+                # Legacy fallback : si on arrive ici, retour hub immédiat
+                self.start_hub()
+                continue
 
             if self.show_god_dialog:
                 self.draw_god_dialog()
@@ -3003,14 +3064,18 @@ class Game:
                   60, Pal.HP_FILL, 8.0, 50, 0.0, 5)
 
         if self.boss and self.boss.dead and not self.boss.final_blow_active:
-            if self.state != STATE_VICTORY:
-                self.state = STATE_VICTORY
-                self.victory_timer = 1
+            if self.final_blow_hub_t == 0:
+                self.final_blow_hub_t = 1
                 self.player.score += 1500
-                for _ in range(6):
+                for _ in range(8):
                     burst(self.particles, 640 + random.randint(-200, 200),
                           300 + random.randint(-150, 150),
                           40, pal_accent(self.player.dimension), 8.0, 60, 0.0, 5)
+            else:
+                self.final_blow_hub_t += 1
+                if self.final_blow_hub_t >= 300:
+                    self.start_hub()
+                    return
 
         self.update_camera(self.player.rect, bounds=(-220, -200, 1600, 800))
         self.starfield.update()
@@ -3194,15 +3259,40 @@ class Game:
         if in_arena and self.boss and self.boss.final_blow_active:
             t = self.boss.final_blow_t
             s = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-            if t < 40:
-                s.fill((0, 0, 0, max(0, min(255, t * 2))))
-            elif t < 80:
-                intensity = max(0, min(255, int(255 * (t - 40) / 40)))
-                s.fill((255, 255, 255, intensity))
-            elif t < 130:
-                intensity = max(0, min(255, int(255 * (1 - (t - 80) / 50))))
-                s.fill((255, 255, 255, intensity))
+            # Phase A : légère vignette sombre qui s'intensifie
+            if t <= 60:
+                s.fill((0, 0, 0, min(120, int(120 * t / 60))))
+            # Phase B : silence — vignette sombre + bord rouge pulsant
+            elif t <= 110:
+                prog_b = (t - 61) / 49.0
+                pulse = max(0, int(25 * math.sin(t * 0.22)))
+                s.fill((6, 0, 0, min(160, int(80 + 80 * prog_b))))
+                pygame.draw.rect(s, (180, 10, 10, 60 + pulse), (0, 0, WIDTH, HEIGHT), 10)
+            # Phase C + D : fond sombre, la main divine est dessinée séparément
+            elif t <= 210:
+                s.fill((0, 0, 0, 170))
+            # Phase E : flash blanc à l'impact
+            elif t <= 230:
+                fa = max(0, min(255, int(255 * (1.0 - (t - 211) / 19.0))))
+                s.fill((255, 250, 220, fa))
+            # Phase F : fondu au noir progressif
+            elif t <= 300:
+                fa = min(255, int(255 * (t - 231) / 69.0))
+                s.fill((0, 0, 0, fa))
             self.screen.blit(s, (0, 0))
+            # Main divine
+            if self.divine_hand_visible and t >= 111:
+                if t <= 165:
+                    prog = (t - 111) / 54.0
+                elif t <= 210:
+                    prog = 1.0
+                else:
+                    prog = 0.0
+                self._draw_divine_hand(self.divine_hand_x, self.divine_hand_y, prog)
+
+        # ── Victoire post-boss : overlay + auto-hub ─────────────────────────
+        if in_arena and self.final_blow_hub_t > 0:
+            self._draw_victory_overlay()
 
         # ── Post-DR dialogue ────────────────────────────────────────────────────
         if in_arena and self.post_dr_dialog_t > 0:
@@ -3638,6 +3728,95 @@ class Game:
         else:
             sub = self.font_med.render("R — retour au hub", True, Pal.UI_DARK)
         self.screen.blit(sub, sub.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 60)))
+
+
+    def _draw_divine_hand(self, cx, cy, progress):
+        """Main divine procédurale qui descend du ciel — doigts pointés vers le bas."""
+        if progress <= 0:
+            return
+        s = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        alpha = max(0, min(255, int(220 * progress)))
+        col_skin  = (255, 245, 200, alpha)
+        col_glow  = (255, 230, 120, max(0, alpha - 80))
+        col_inner = (255, 255, 240, min(255, alpha + 30))
+
+        scale = 0.4 + 0.6 * progress
+        palm_w = int(88 * scale)
+        palm_h = int(66 * scale)
+
+        # Rayon de lumière vertical depuis le haut jusqu'à la main
+        beam_w = max(4, int(20 + progress * 80))
+        for by_px in range(0, cy, 6):
+            ba = max(0, int(alpha * 0.45 * (1.0 - by_px / max(1, cy))))
+            pygame.draw.rect(s, (255, 240, 160, ba),
+                             (cx - beam_w // 2, by_px, beam_w, 6))
+
+        # Aura dorée derrière la main
+        for ra, aa in [(palm_w + 30, 60), (palm_w + 18, 90), (palm_w + 6, 110)]:
+            a2 = max(0, min(255, int(aa * progress)))
+            pygame.draw.circle(s, (255, 220, 100, a2),
+                               (cx, cy + palm_h // 2),
+                               int(ra * scale), max(1, int(4 * scale)))
+
+        # Doigts (pointés vers le bas)
+        finger_cfgs = [(-38, 48, 14), (-19, 58, 15), (0, 62, 15), (19, 56, 14), (36, 44, 12)]
+        for fx_off, fh_base, fw_base in finger_cfgs:
+            fw = max(2, int(fw_base * scale))
+            fh = max(4, int(fh_base * scale))
+            fx = cx + int(fx_off * scale) - fw // 2
+            fy = cy + palm_h  # sous la paume
+            pygame.draw.rect(s, col_skin,
+                             pygame.Rect(fx, fy, fw, fh),
+                             border_radius=max(1, int(5 * scale)))
+            pygame.draw.rect(s, col_inner,
+                             pygame.Rect(fx + max(1, fw // 4), fy + 2,
+                                         max(1, fw // 2), max(2, fh // 3)),
+                             border_radius=max(1, int(3 * scale)))
+
+        # Paume
+        palm_rect = pygame.Rect(cx - palm_w // 2, cy, palm_w, palm_h)
+        pygame.draw.rect(s, col_skin, palm_rect,
+                         border_radius=max(2, int(10 * scale)))
+        pygame.draw.rect(s, col_inner,
+                         pygame.Rect(cx - palm_w // 3, cy + int(4 * scale),
+                                     palm_w * 2 // 3, int(12 * scale)),
+                         border_radius=max(1, int(4 * scale)))
+        pygame.draw.rect(s, col_glow, palm_rect, max(1, int(2 * scale)),
+                         border_radius=max(2, int(10 * scale)))
+
+        # Rayons de lumière (12, tous les 30°)
+        for angle_deg in range(0, 360, 30):
+            angle = math.radians(angle_deg)
+            r1 = int((palm_w // 2 + 10) * scale)
+            r2 = int((palm_w // 2 + 30 + 10 * math.cos(angle * 3)) * scale)
+            x1 = cx + int(r1 * math.cos(angle))
+            y1 = cy + palm_h // 2 + int(r1 * math.sin(angle))
+            x2 = cx + int(r2 * math.cos(angle))
+            y2 = cy + palm_h // 2 + int(r2 * math.sin(angle))
+            ra2 = max(0, min(255, int(80 * progress)))
+            pygame.draw.line(s, (255, 240, 150, ra2), (x1, y1), (x2, y2),
+                             max(1, int(2 * scale)))
+
+        self.screen.blit(s, (0, 0))
+
+    def _draw_victory_overlay(self):
+        """Overlay fondu au noir + texte victoire pendant les 5 sec post-boss."""
+        t = self.final_blow_hub_t
+        # Fondu progressif
+        fade_a = min(200, int(200 * t / 80)) if t < 80 else 200
+        ov = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        ov.fill((0, 0, 0, fade_a))
+        self.screen.blit(ov, (0, 0))
+        # Texte qui apparaît après 30 frames
+        if t > 30:
+            txt_a = min(255, int(255 * (t - 30) / 40))
+            title = self.font_announce.render("LA LUNE EST TOMBÉE", True, (255, 230, 180))
+            title.set_alpha(txt_a)
+            self.screen.blit(title, title.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 30)))
+            secs = max(0, (300 - t) // 60 + 1)
+            sub = self.font_med.render(f"Retour au sanctuaire dans {secs}…   R — maintenant", True, (200, 180, 140))
+            sub.set_alpha(txt_a)
+            self.screen.blit(sub, sub.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 35)))
 
 
 def main():
