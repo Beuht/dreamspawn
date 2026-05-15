@@ -3337,9 +3337,9 @@ class Game:
 
     def draw_boss_ui(self):
         if not self.boss: return
-        bw, bh = 500, 14
+        bw, bh = 380, 10
         bx = WIDTH // 2 - bw // 2
-        by = 14   # haut de l'écran, à la place du texte dimension
+        by = 36   # un peu en dessous du bord haut
 
         # Couleur selon la phase
         if self.boss.phase == 5:
@@ -3389,7 +3389,7 @@ class Game:
         # Indicateur post-DR
         if self.boss and self.boss.post_dr:
             def_s = self.font_sm.render("DEFENSE ACCRUE  fleches -50%", True, (255, 100, 80))
-            self.screen.blit(def_s, def_s.get_rect(midtop=(WIDTH // 2, 6)))
+            self.screen.blit(def_s, def_s.get_rect(midtop=(WIDTH // 2, by + bh + 24)))
         # God mode indicator
         if self.god_mode:
             gm_s = self.font_sm.render("GOD MODE", True, (100, 255, 120))
