@@ -3535,52 +3535,56 @@ class Game:
             self.screen.blit(w, w.get_rect(midbottom=(WIDTH // 2, HEIGHT - 6)))
 
     def draw_hud(self):
-        # ── Barre HP héros (asset pixel-art) ─────────────────────────────────
-        frac  = max(0.0, self.player.hp / self.player.max_hp)
-        hfx   = 8                            # x gauche du frame
-        hfy   = 8                            # y haut du frame  (bar à y=8+20=28)
-        hbar_screen_y = hfy + self._hero_fill_y0   # y réel de la barre = 28
+        # ── Barre HP héros ────────────────────────────────────────────────────
+        # fill zone src : x=32..121 (90px), y=10..13 (4px)  → ×2 : x=64, w=180, y=20, h=8
+        hfx        = 8
+        hfy        = 8
+        frac       = max(0.0, self.player.hp / self.player.max_hp)
+        fill_sx    = hfx + self._hero_fill_x0          # 8+64 = 72  (screen x du fill)
+        fill_sy    = hfy + self._hero_fill_y0          # 8+20 = 28  (screen y du fill)
+        fill_h     = 8                                  # 4 lignes × scale2
+        fill_sw    = max(0, int(self._hero_fill_w * frac))  # largeur HP actuelle
 
-        # Fill (en dessous du frame)
-        if self._hero_fill and frac > 0:
-            clip_w = self._hero_fill_x0 + max(0, int(self._hero_fill_w * frac))
-            clip_w = min(clip_w, self._hero_fw)
-            self.screen.blit(self._hero_fill, (hfx, hfy),
-                             area=pygame.Rect(0, 0, clip_w, self._hero_fh))
-        elif not self._hero_fill:
-            fw2 = max(0, int(self._hero_fill_w * frac))
-            pygame.draw.rect(self.screen, Pal.HP_FILL,
-                             (hfx + self._hero_fill_x0, hbar_screen_y, fw2, 8))
-
-        # Frame par-dessus
+        # 1. Frame en premier (fond + décor)
         if self._hero_frame:
             self.screen.blit(self._hero_frame, (hfx, hfy))
         else:
-            pygame.draw.rect(self.screen, Pal.UI,
-                             (hfx, hbar_screen_y - 2, self._hero_fw, 12), 2)
+            pygame.draw.rect(self.screen, Pal.HP_BG,
+                             (fill_sx, fill_sy, self._hero_fill_w, fill_h))
+
+        # 2. Fill PAR-DESSUS le frame (clip = fraction HP)
+        if fill_sw > 0:
+            if self._hero_fill:
+                self.screen.blit(self._hero_fill,
+                                 (fill_sx, fill_sy),
+                                 area=pygame.Rect(self._hero_fill_x0,
+                                                  self._hero_fill_y0,
+                                                  fill_sw, fill_h))
+            else:
+                pygame.draw.rect(self.screen, Pal.HP_FILL,
+                                 (fill_sx, fill_sy, fill_sw, fill_h))
 
         # Label HP
         hp_lbl = self.font_sm.render(
             f"{self.player.hp}/{self.player.max_hp}", True, Pal.UI)
-        self.screen.blit(hp_lbl, (hfx + self._hero_fill_x0 + 4, hbar_screen_y - 18))
+        self.screen.blit(hp_lbl, (fill_sx + 4, fill_sy - 18))
 
-        # Bouclier (shield) — barre verte sous la barre HP
+        # Bouclier
         if self.player.shield > 0:
-            sh     = 8
-            sh_x   = hfx + self._hero_fill_x0
-            sh_w   = self._hero_fill_w
-            sy2    = hbar_screen_y + 10
+            sh_x = fill_sx
+            sh_w = self._hero_fill_w
+            sy2  = fill_sy + fill_h + 2
             shield_frac = min(1.0, self.player.shield / 10)
-            pygame.draw.rect(self.screen, (20, 60, 30),    (sh_x, sy2, sh_w, sh), border_radius=4)
-            pygame.draw.rect(self.screen, (60, 220, 100),  (sh_x, sy2, int(sh_w * shield_frac), sh), border_radius=4)
-            pygame.draw.rect(self.screen, (120, 255, 150), (sh_x, sy2, sh_w, sh), 1, border_radius=4)
+            pygame.draw.rect(self.screen, (20, 60, 30),    (sh_x, sy2, sh_w, 6), border_radius=3)
+            pygame.draw.rect(self.screen, (60, 220, 100),  (sh_x, sy2, int(sh_w * shield_frac), 6), border_radius=3)
+            pygame.draw.rect(self.screen, (120, 255, 150), (sh_x, sy2, sh_w, 6), 1, border_radius=3)
             sh_lbl = self.font_sm.render(f"BOUCLIER  {self.player.shield}", True, (120, 255, 150))
-            self.screen.blit(sh_lbl, (sh_x + 4, sy2 - 1))
+            self.screen.blit(sh_lbl, (sh_x + 4, sy2))
 
         lbl = "RÉALITÉ" if self.player.dimension == DIM_REAL else "RÊVE BRISÉ"
         col = pal_accent(self.player.dimension)
         d_surf = self.font_sm.render(lbl, True, col)
-        self.screen.blit(d_surf, (hfx + self._hero_fill_x0 + 4, hbar_screen_y + 10))
+        self.screen.blit(d_surf, (fill_sx + 4, fill_sy + fill_h + 2))
 
         cd_w = 220
         cd_x = WIDTH // 2 - cd_w // 2
@@ -3616,55 +3620,51 @@ class Game:
     def draw_boss_ui(self):
         if not self.boss: return
 
-        # ── Position : centré, bar target y=36 ───────────────────────────────
-        fx = WIDTH // 2 - self._hp_fw // 2
-        fy = 36 - self._hp_fill_y0   # fill_y0=28 → fy=8, frame y=8..72
+        # ── Position ──────────────────────────────────────────────────────────
+        # fill zone src : x=24..107 (84px), y=14..17 (4px)  → ×2 : x=48, w=168, y=28, h=8
+        fx      = WIDTH // 2 - self._hp_fw // 2
+        fy      = 36 - self._hp_fill_y0          # fill_y0=28 → fy=8
+        frac    = self.boss.display_bar_fraction()
+        fill_h  = 8                               # 4 lignes × scale2
+        fill_sx = fx + self._hp_fill_x0           # screen x du fill
+        fill_sy = fy + self._hp_fill_y0           # screen y du fill (=36)
+        fill_sw = max(0, int(self._hp_fill_w * frac))
 
-        frac = self.boss.display_bar_fraction()
-
-        # ── Couleur de teinture selon la phase ────────────────────────────────
+        # Couleur directe selon la phase (pas de BLEND — draw rect propre)
         if self.boss.last_resort_active:
-            pulse = abs(math.sin(self.frame * 0.18))
-            tint  = (int(210 + 45 * pulse), int(18 * (1 - pulse)), 18)
+            pulse     = abs(math.sin(self.frame * 0.18))
+            phase_col = (int(220 + 35 * pulse), int(20 * (1 - pulse)), 15)
         elif self.boss.phase == 5:
-            tint = (220, 25, 70) if self.boss.final_form else (185, 50, 110)
-        elif self.boss.phase == 4: tint = Pal.BOSS_HP_D
-        elif self.boss.phase == 3: tint = (140, 140, 210)
-        else:                       tint = None   # rouge naturel de l'asset
+            phase_col = (210, 20, 55) if self.boss.final_form else (175, 45, 95)
+        elif self.boss.phase == 4: phase_col = (255, 100, 180)
+        elif self.boss.phase == 3: phase_col = (110, 110, 205)
+        else:                       phase_col = None   # asset naturel
 
-        # ── Fill (en dessous du frame) ─────────────────────────────────────────
-        if self._hp_fill and frac > 0:
-            # On clip la surface scalée à : tout ce qui est à gauche de la fin du fill
-            clip_w = self._hp_fill_x0 + max(0, int(self._hp_fill_w * frac))
-            clip_w = min(clip_w, self._hp_fw)
-            if tint:
-                tmp = self._hp_fill.copy()
-                ts  = pygame.Surface(tmp.get_size())
-                ts.fill(tint)
-                tmp.blit(ts, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
-                self.screen.blit(tmp, (fx, fy),
-                                 area=pygame.Rect(0, 0, clip_w, self._hp_fh))
-            else:
-                self.screen.blit(self._hp_fill, (fx, fy),
-                                 area=pygame.Rect(0, 0, clip_w, self._hp_fh))
-        elif not self._hp_fill:
-            # Fallback procédural
-            col = tint if tint else (205, 48, 15)
-            fw = max(0, int(self._hp_fill_w * frac))
-            pygame.draw.rect(self.screen, col,
-                             (fx + self._hp_fill_x0, fy + self._hp_fill_y0, fw, 12))
-
-        # ── Frame par-dessus ──────────────────────────────────────────────────
+        # 1. Frame en premier
         if self._hp_frame:
             self.screen.blit(self._hp_frame, (fx, fy))
         else:
-            pygame.draw.rect(self.screen, (220, 178, 52),
-                             (fx, fy + self._hp_fill_y0 - 4,
-                              self._hp_fw, 20), 2)
+            pygame.draw.rect(self.screen, (30, 18, 8),
+                             (fill_sx, fill_sy, self._hp_fill_w, fill_h))
+
+        # 2. Fill PAR-DESSUS le frame
+        if fill_sw > 0:
+            if phase_col is None and self._hp_fill:
+                # Asset rouge naturel
+                self.screen.blit(self._hp_fill,
+                                 (fill_sx, fill_sy),
+                                 area=pygame.Rect(self._hp_fill_x0,
+                                                  self._hp_fill_y0,
+                                                  fill_sw, fill_h))
+            else:
+                # Couleur phase directe
+                col = phase_col if phase_col else (205, 48, 15)
+                pygame.draw.rect(self.screen, col,
+                                 (fill_sx, fill_sy, fill_sw, fill_h))
 
         # ── Textes ────────────────────────────────────────────────────────────
-        bar_screen_y = fy + self._hp_fill_y0   # Y réel de la barre sur l'écran
-        below_y = bar_screen_y + 14
+        bar_screen_y = fill_sy
+        below_y = bar_screen_y + fill_h + 2
 
         name = self.font_sm.render(f"LA LUNE  —  Phase {self.boss.phase}", True, Pal.UI)
         self.screen.blit(name, name.get_rect(midbottom=(WIDTH // 2, bar_screen_y - 2)))
