@@ -3808,43 +3808,62 @@ class Game:
         self.screen.blit(s, (0, 0))
 
     def _draw_victory_overlay(self):
-        """Écran noir + 'CE N'EST PAS LE MOMENT VENU' en doré, 5 sec → hub."""
+        """Écran fin : texte blanc → fondu → texte doré sur noir. 5 sec → hub."""
         t = self.final_blow_hub_t
 
-        # Fond noir plein (opaque) dès le début
+        # ── Phase 1 (t 0-30) : flash blanc qui se noircit ──────────────────
+        # Vient juste après le fondu au noir de la cinématique, on repart du blanc
+        if t <= 30:
+            white_a = max(0, 255 - int(255 * t / 30))
+            self.screen.fill((0, 0, 0))
+            flash = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            flash.fill((255, 255, 255, white_a))
+            self.screen.blit(flash, (0, 0))
+            return  # rien d'autre encore
+
+        # ── Fond noir plein ─────────────────────────────────────────────────
         self.screen.fill((0, 0, 0))
 
-        # Titre principal : fade-in progressif (0-60 frames)
-        txt_a = min(255, int(255 * t / 60))
+        # ── Interpolation couleur texte : blanc → doré (t 30-120) ──────────
+        lerp = min(1.0, (t - 30) / 90.0)  # 0.0 = blanc, 1.0 = doré
+        def lerp_col(c1, c2, k):
+            return tuple(int(c1[i] + (c2[i] - c1[i]) * k) for i in range(3))
 
-        # Ligne 1 : "CE N'EST PAS"
-        line1 = self.font_big.render("CE N'EST PAS", True, (255, 215, 80))
+        col_line1 = lerp_col((255, 255, 255), (255, 215, 80),  lerp)
+        col_line2 = lerp_col((255, 255, 255), (255, 190, 50),  lerp)
+        col_sep   = lerp_col((255, 255, 255), (255, 200, 60),  lerp)
+        col_sub   = lerp_col((200, 200, 200), (200, 175, 100), lerp)
+
+        # ── Opacité globale du texte (fade-in depuis t=30) ──────────────────
+        txt_a = min(255, int(255 * (t - 30) / 40))
+
+        # ── Séparateurs (fins, symétriques) ─────────────────────────────────
+        sep_w = int(80 + 340 * min(1.0, (t - 30) / 60.0))   # s'élargissent
+        sep_a = min(200, txt_a)
+        sep_s = pygame.Surface((sep_w, 2), pygame.SRCALPHA)
+        sep_s.fill((*col_sep, sep_a))
+        self.screen.blit(sep_s, sep_s.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 76)))
+        self.screen.blit(sep_s, sep_s.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 76)))
+
+        # ── Texte principal ─────────────────────────────────────────────────
+        line1 = self.font_big.render("CE N'EST PAS", True, col_line1)
         line1.set_alpha(txt_a)
-        self.screen.blit(line1, line1.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 60)))
+        self.screen.blit(line1, line1.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 44)))
 
-        # Ligne 2 : "LE MOMENT VENU" — légèrement plus petite, décalée
-        line2 = self.font_big.render("LE MOMENT VENU", True, (255, 200, 60))
+        line2 = self.font_big.render("LE MOMENT VENU", True, col_line2)
         line2.set_alpha(txt_a)
-        self.screen.blit(line2, line2.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 10)))
+        self.screen.blit(line2, line2.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 20)))
 
-        # Séparateur doré
-        if txt_a > 80:
-            sep_a = min(180, txt_a - 80)
-            sep_s = pygame.Surface((400, 2), pygame.SRCALPHA)
-            sep_s.fill((255, 200, 60, sep_a))
-            self.screen.blit(sep_s, sep_s.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 80)))
-            self.screen.blit(sep_s, sep_s.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 70)))
-
-        # Sous-titre : compte à rebours (apparaît après 90 frames)
-        if t > 90:
-            sub_a = min(180, int(180 * (t - 90) / 40))
+        # ── Sous-titre compte à rebours (après 120 frames) ──────────────────
+        if t > 120:
+            sub_a = min(160, int(160 * (t - 120) / 40))
             secs = max(0, (300 - t) // 60 + 1)
             sub = self.font_med.render(
-                f"Retour au sanctuaire dans {secs}…   R — maintenant",
-                True, (200, 175, 100)
+                f"Retour au sanctuaire dans {secs}s…    R — maintenant",
+                True, col_sub
             )
             sub.set_alpha(sub_a)
-            self.screen.blit(sub, sub.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 110)))
+            self.screen.blit(sub, sub.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 100)))
 
 
 def main():
