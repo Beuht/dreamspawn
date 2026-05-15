@@ -2884,11 +2884,10 @@ class Game:
                 self.draw_hub_overlay()
             elif self.state == STATE_MOON:
                 if do_update: self.update_moon()
+                self.draw_world(in_arena=True)
                 if self.final_blow_hub_t > 0:
-                    # Écran noir + "CE N'EST PAS LE MOMENT VENU" — rien d'autre
-                    self._draw_victory_overlay()
+                    self._draw_victory_overlay()   # fond progressif + texte par-dessus
                 else:
-                    self.draw_world(in_arena=True)
                     self.draw_boss_ui()
                     self.draw_announce()
             elif self.state == STATE_GAMEOVER:
@@ -3808,11 +3807,9 @@ class Game:
         self.screen.blit(s, (0, 0))
 
     def _draw_victory_overlay(self):
-        """Écran fin soigné : bloom blanc → doré vif sur noir. 5 sec → hub."""
+        """Fond noir progressif sur le monde + texte blanc→doré. 5 sec → hub."""
         t = self.final_blow_hub_t
-        self.screen.fill((0, 0, 0))
 
-        # ── Fonctions utilitaires ─────────────────────────────────────────
         def easeout(x):
             x = max(0.0, min(1.0, x))
             return 1.0 - (1.0 - x) ** 3
@@ -3820,12 +3817,23 @@ class Game:
         def lc(a, b, k):
             return tuple(int(a[i] * (1 - k) + b[i] * k) for i in range(3))
 
-        # ── Paramètres de progression ─────────────────────────────────────
-        fade = easeout(t / 40.0)          # opacité globale 0→1 en 40 frames
-        lerp = easeout(t / 90.0)          # couleur blanc→doré en 90 frames
-        txt_a = int(255 * fade)
+        # ── Voile noir qui s'intensifie lentement (120 frames = 2 sec) ───
+        black_a = int(255 * easeout(t / 120.0))
+        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        veil.fill((0, 0, 0, black_a))
+        self.screen.blit(veil, (0, 0))
 
-        # Dorés vifs et lumineux
+        # Texte visible seulement une fois le fond assez sombre (t > 60)
+        if t <= 60:
+            return
+
+        txt_t = t - 60   # temps relatif pour le texte
+        fade  = easeout(txt_t / 50.0)          # opacité texte 0→1
+        lerp  = easeout(txt_t / 100.0)         # couleur blanc→doré
+        txt_a = int(255 * fade)
+        if txt_a <= 0:
+            return
+
         GOLD1  = (255, 248, 130)
         GOLD2  = (255, 232, 100)
         GOLD_S = (255, 242, 115)
@@ -3836,29 +3844,16 @@ class Game:
         col_s = lc((255, 255, 255), GOLD_S, lerp)
         col_b = lc((210, 210, 210), GOLD_B, lerp)
 
-        cy = HEIGHT // 2 - 11   # centre vertical du bloc texte
-
-        # ── Halo lumineux derrière le texte ──────────────────────────────
-        # Bloom blanc intense au début, se transforme en halo doré doux
-        glow_w = max(0.0, 1.0 - lerp * 1.4)   # bloom blanc disparaît
-        glow_g = lerp * 0.45                    # halo doré apparaît
-        ov = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        for w, h, am in [(820, 180, 0.20), (600, 110, 0.30), (420, 65, 0.45)]:
-            ga = int(140 * fade * glow_w * am)
-            if ga > 1:
+        # ── Halo doré derrière le texte ───────────────────────────────────
+        glow_a = int(lerp * 40 * fade)
+        if glow_a > 1:
+            for w, h in [(700, 130), (500, 75)]:
                 gs = pygame.Surface((w, h), pygame.SRCALPHA)
-                gs.fill((255, 252, 225, ga))
-                ov.blit(gs, gs.get_rect(center=(WIDTH // 2, cy)))
-        for w, h, am in [(700, 130, 0.14), (500, 75, 0.22)]:
-            ga = int(255 * fade * glow_g * am)
-            if ga > 1:
-                gs = pygame.Surface((w, h), pygame.SRCALPHA)
-                gs.fill((*GOLD_S, ga))
-                ov.blit(gs, gs.get_rect(center=(WIDTH // 2, cy)))
-        self.screen.blit(ov, (0, 0))
+                gs.fill((*GOLD_S, glow_a))
+                self.screen.blit(gs, gs.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 11)))
 
-        # ── Séparateurs qui s'élargissent depuis le centre ────────────────
-        sep_w = int(easeout(min(1.0, t / 55.0)) * 370)
+        # ── Séparateurs ───────────────────────────────────────────────────
+        sep_w = int(easeout(min(1.0, txt_t / 55.0)) * 370)
         sep_a = int(220 * fade)
         if sep_w > 4 and sep_a > 0:
             for sep_y in (HEIGHT // 2 - 78, HEIGHT // 2 + 78):
@@ -3875,9 +3870,9 @@ class Game:
         line2.set_alpha(txt_a)
         self.screen.blit(line2, line2.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 22)))
 
-        # ── Sous-titre + compte à rebours ─────────────────────────────────
-        if t > 100:
-            sub_a = min(155, int(155 * (t - 100) / 45))
+        # ── Sous-titre ────────────────────────────────────────────────────
+        if txt_t > 80:
+            sub_a = min(155, int(155 * (txt_t - 80) / 45))
             secs = max(1, (300 - t) // 60 + 1)
             sub = self.font_med.render(
                 f"Retour au sanctuaire dans {secs}s…    R — maintenant",
