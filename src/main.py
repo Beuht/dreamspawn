@@ -2627,14 +2627,17 @@ class Game:
         self._hp_fill_y0  = 14  * _BS                # 28  (y dans surf scalée)
 
         # Hero HP bar  (Health_01 — 128×32 src, fill x=32..121 y=10..13)
-        _HS = 2                                      # hero scale ×2
+        _HS = 3                                      # hero scale ×3
         self._hero_frame   = _load_ui("hp_hero_frame.png", _HS)
         self._hero_fill    = _load_ui("hp_hero_fill.png",  _HS)
-        self._hero_fw      = 128 * _HS               # 256
-        self._hero_fh      = 32  * _HS               # 64
-        self._hero_fill_x0 = 32  * _HS               # 64
-        self._hero_fill_w  = 90  * _HS               # 180
-        self._hero_fill_y0 = 10  * _HS               # 20  (y dans surf scalée)
+        self._hero_fw      = 128 * _HS               # 384
+        self._hero_fh      = 32  * _HS               # 96
+        self._hero_fill_x0 = 32  * _HS               # 96
+        self._hero_fill_w  = 90  * _HS               # 270
+        self._hero_fill_y0 = 10  * _HS               # 30  (y dans surf scalée)
+        # Zone coeur (x=0..31 src → x=0..93 scalé, y=0..29 src → y=0..87 scalé)
+        self._hero_heart_w = 32  * _HS               # 96  largeur zone coeur
+        self._hero_heart_h = 30  * _HS               # 90  hauteur zone coeur
 
         # Background images avec parallax
         _base_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -3536,38 +3539,43 @@ class Game:
 
     def draw_hud(self):
         # ── Barre HP héros ────────────────────────────────────────────────────
-        # fill zone src : x=32..121 (90px), y=10..13 (4px)  → ×2 : x=64, w=180, y=20, h=8
-        hfx        = 8
-        hfy        = 8
-        frac       = max(0.0, self.player.hp / self.player.max_hp)
-        fill_sx    = hfx + self._hero_fill_x0          # 8+64 = 72  (screen x du fill)
-        fill_sy    = hfy + self._hero_fill_y0          # 8+20 = 28  (screen y du fill)
-        fill_h     = 8                                  # 4 lignes × scale2
-        fill_sw    = max(0, int(self._hero_fill_w * frac))  # largeur HP actuelle
+        # fill zone src : x=32..121 (90px), y=10..13 (4px)  → ×3 : x=96, w=270, y=30, h=12
+        hfx     = 8
+        hfy     = 4
+        frac    = max(0.0, self.player.hp / self.player.max_hp)
+        fill_sx = hfx + self._hero_fill_x0       # screen x début du fill
+        fill_sy = hfy + self._hero_fill_y0        # screen y du fill
+        fill_h  = 4 * 3                           # 4 lignes × scale3 = 12px
+        fill_sw = max(0, int(self._hero_fill_w * frac))
+        # Couleur rouge naturelle du fill asset
+        RED_FILL = (205, 48, 15)
 
-        # 1. Frame en premier (fond + décor)
+        # 0. Rouge derrière le cadre (coeur + barre) pour que l'intérieur
+        #    transparent du coeur devienne rouge
+        if frac > 0:
+            # Remplir toute la zone coeur en rouge (l'intérieur transparent laisse passer)
+            pygame.draw.rect(self.screen, RED_FILL,
+                             (hfx, hfy, self._hero_heart_w, self._hero_heart_h))
+            # Remplir la zone barre proportionnellement
+            pygame.draw.rect(self.screen, RED_FILL,
+                             (fill_sx, fill_sy, fill_sw, fill_h))
+
+        # 1. Frame PAR-DESSUS (l'intérieur du coeur est transparent → le rouge passe)
         if self._hero_frame:
             self.screen.blit(self._hero_frame, (hfx, hfy))
         else:
             pygame.draw.rect(self.screen, Pal.HP_BG,
                              (fill_sx, fill_sy, self._hero_fill_w, fill_h))
+            pygame.draw.rect(self.screen, Pal.HP_FILL,
+                             (fill_sx, fill_sy, fill_sw, fill_h))
 
-        # 2. Fill PAR-DESSUS le frame (clip = fraction HP)
-        if fill_sw > 0:
-            if self._hero_fill:
-                self.screen.blit(self._hero_fill,
-                                 (fill_sx, fill_sy),
-                                 area=pygame.Rect(self._hero_fill_x0,
-                                                  self._hero_fill_y0,
-                                                  fill_sw, fill_h))
-            else:
-                pygame.draw.rect(self.screen, Pal.HP_FILL,
-                                 (fill_sx, fill_sy, fill_sw, fill_h))
-
-        # Label HP
-        hp_lbl = self.font_sm.render(
-            f"{self.player.hp}/{self.player.max_hp}", True, Pal.UI)
-        self.screen.blit(hp_lbl, (fill_sx + 4, fill_sy - 18))
+        # 2. Fill asset PAR-DESSUS le frame pour les détails (reflet/ombre)
+        if fill_sw > 0 and self._hero_fill:
+            self.screen.blit(self._hero_fill,
+                             (fill_sx, fill_sy),
+                             area=pygame.Rect(self._hero_fill_x0,
+                                              self._hero_fill_y0,
+                                              fill_sw, fill_h))
 
         # Bouclier
         if self.player.shield > 0:
@@ -3581,7 +3589,7 @@ class Game:
             sh_lbl = self.font_sm.render(f"BOUCLIER  {self.player.shield}", True, (120, 255, 150))
             self.screen.blit(sh_lbl, (sh_x + 4, sy2))
 
-        lbl = "RÉALITÉ" if self.player.dimension == DIM_REAL else "RÊVE BRISÉ"
+        lbl = "REALITE" if self.player.dimension == DIM_REAL else "REVE BRISE"
         col = pal_accent(self.player.dimension)
         d_surf = self.font_sm.render(lbl, True, col)
         self.screen.blit(d_surf, (fill_sx + 4, fill_sy + fill_h + 2))
