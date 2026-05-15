@@ -1702,7 +1702,8 @@ class MoonBoss:
                     hits_any_dim=hits_any_dim, dmg=1
                 ))
         telegraphs.append(Telegraph("fan", 45, dim, on_fire=fire,
-                                    color=Pal.TELEGRAPH, x=ox, y=oy,
+                                    hits_any_dim=hits_any_dim,
+                                    x=ox, y=oy,
                                     angle=base_ang, spread=spread, count=count, length=800))
 
     def _tg_meteor_targets(self, player, projectiles, telegraphs, particles, hits_any_dim=False):
@@ -1722,7 +1723,7 @@ class MoonBoss:
                     ))
                 return fire
             telegraphs.append(Telegraph("circle", 60 + i * 8, d, on_fire=make_fire(),
-                                        color=Pal.TELEGRAPH, x=tx, y=ty, r=40))
+                                        hits_any_dim=hits_any_dim, x=tx, y=ty, r=40))
 
     def _tg_lullaby_ring(self, player, rings, telegraphs, hits_any_dim=False):
         ox, oy = self.x, self.y
@@ -1766,7 +1767,7 @@ class MoonBoss:
                               color=(Pal.MOON_GLOW if dim == DIM_REAL else (255, 180, 220))))
             if self._snd_laser: self._snd_laser.play()
         telegraphs.append(Telegraph("beam_h", 50, dim, on_fire=fire,
-                                    color=Pal.TELEGRAPH, y=y, left=left, right=right,
+                                    y=y, left=left, right=right,
                                     final_height=60))
 
     def _tg_beam_vertical(self, x, beams, telegraphs, dim=DIM_REAL, duration=70, width=70, dmg=3, hits_any_dim=False, red=False):
@@ -1975,6 +1976,7 @@ class MoonBoss:
             burst(particles, self.x, self.y, 80, (255, 220, 60), 12.0, 55, 0.0, 5)
             self.game.add_shake(45, 70)
             self.game.start_slowmo(40)
+            if self._snd_laser: self._snd_laser.play()
             # Rayon colossal toute l'arène
             rect = pygame.Rect(int(self.ax_left),
                                int(self.ay_top),
@@ -2527,6 +2529,7 @@ class Game:
         self.pre_dr_zoom_t = 0
         self.post_dr_dialog_t = 0
         self.final_blow_dialog_t = 0
+        self.victory_timer = 0   # compte à rebours avant retour au hub (5 sec)
         self.settings_open = False
         self._settings_path = os.path.join(os.path.expanduser("~"), ".dreamspawn_settings.json")
         self.music_vol = 0.30
@@ -2648,6 +2651,11 @@ class Game:
         self.arrows.clear()
         self.damage_numbers.clear()
         self.heal_orbs.clear()
+        self.victory_timer = 0
+        try:
+            pygame.mixer.music.fadeout(1500)
+        except Exception:
+            pass
         self.platforms, self.portals, spawn = make_hub()
         self.player = Player(*spawn)
         self.cam = [0, 0]
@@ -2679,6 +2687,8 @@ class Game:
             self.boss.y = self.boss.cy - 140
         self.cam = [0, 0]
         self.state = STATE_MOON
+        self.victory_timer = 0
+        self._play_music("boss_moon.mp3", fadein_ms=2000)
 
     def add_shake(self, strength, frames=10):
         self.shake = max(self.shake, frames)
@@ -2810,6 +2820,11 @@ class Game:
                 self.draw_world(in_arena=(self.boss is not None))
                 self.draw_gameover()
             elif self.state == STATE_VICTORY:
+                if self.victory_timer > 0:
+                    self.victory_timer += 1
+                    if self.victory_timer >= 300:   # 5 secondes → retour au hub
+                        self.start_hub()
+                        continue
                 self.draw_world(in_arena=True)
                 self.draw_victory()
 
@@ -2988,12 +3003,14 @@ class Game:
                   60, Pal.HP_FILL, 8.0, 50, 0.0, 5)
 
         if self.boss and self.boss.dead and not self.boss.final_blow_active:
-            self.state = STATE_VICTORY
-            self.player.score += 1500
-            for _ in range(6):
-                burst(self.particles, 640 + random.randint(-200, 200),
-                      300 + random.randint(-150, 150),
-                      40, pal_accent(self.player.dimension), 8.0, 60, 0.0, 5)
+            if self.state != STATE_VICTORY:
+                self.state = STATE_VICTORY
+                self.victory_timer = 1
+                self.player.score += 1500
+                for _ in range(6):
+                    burst(self.particles, 640 + random.randint(-200, 200),
+                          300 + random.randint(-150, 150),
+                          40, pal_accent(self.player.dimension), 8.0, 60, 0.0, 5)
 
         self.update_camera(self.player.rect, bounds=(-220, -200, 1600, 800))
         self.starfield.update()
@@ -3612,9 +3629,15 @@ class Game:
         overlay.fill((245, 235, 252, 180))
         self.screen.blit(overlay, (0, 0))
         s = self.font_big.render("LA LUNE EST TOMBÉE", True, Pal.R_ACCENT)
-        self.screen.blit(s, s.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 30)))
-        t = self.font_med.render(f"Score : {self.player.score}    R — retour au hub", True, Pal.UI_DARK)
-        self.screen.blit(t, t.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 40)))
+        self.screen.blit(s, s.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 40)))
+        sc = self.font_med.render(f"Score : {self.player.score}", True, Pal.UI_DARK)
+        self.screen.blit(sc, sc.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 20)))
+        if self.victory_timer > 0:
+            secs_left = max(0, (300 - self.victory_timer) // 60 + 1)
+            sub = self.font_med.render(f"Retour au sanctuaire dans {secs_left}…   R — maintenant", True, Pal.UI_DARK)
+        else:
+            sub = self.font_med.render("R — retour au hub", True, Pal.UI_DARK)
+        self.screen.blit(sub, sub.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 60)))
 
 
 def main():
