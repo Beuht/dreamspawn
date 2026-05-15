@@ -28,6 +28,7 @@ Boss complet : LA LUNE en 5 phases
   Phase 5 — Le Croissant Inversé (mode Sans : trois patterns en parallèle)
 """
 
+import json
 import math
 import os
 import random
@@ -130,6 +131,8 @@ class Pal:
     BEAM_EDGE  = (255, 200, 150)
     TELEGRAPH  = (80, 160, 255)
     TELEGRAPH_S = (60, 130, 255)  # plus saturé pour les gros tells
+    TELEGRAPH_DREAM = (255, 100, 200)
+    TELEGRAPH_ANY   = (255, 185, 45)
 
 
 def pal_bg(dim):       return Pal.D_BG if dim == DIM_DREAM else Pal.R_BG
@@ -396,7 +399,7 @@ class Beam:
         (0.04, (255, 245, 248)), # blanc pur au cœur
     ]
 
-    def __init__(self, rect, dim, life=24, color=None, dmg=1, hits_any_dim=False, red=False):
+    def __init__(self, rect, dim, life=24, color=None, dmg=1, hits_any_dim=False, red=False, once=False):
         self.rect = rect
         self.dim = dim
         self.life = life
@@ -405,6 +408,8 @@ class Beam:
         self.dmg = dmg
         self.hits_any_dim = hits_any_dim
         self.red = red
+        self.once = once
+        self._hit_done = False
         self.dead = False
 
     def update(self):
@@ -459,7 +464,14 @@ class Telegraph:
         self.duration = duration
         self.dim = dim
         self.on_fire = on_fire
-        self.color = color or Pal.TELEGRAPH
+        if color is not None:
+            self.color = color
+        elif params.get('hits_any_dim', False):
+            self.color = Pal.TELEGRAPH_ANY
+        elif dim == DIM_DREAM:
+            self.color = Pal.TELEGRAPH_DREAM
+        else:
+            self.color = Pal.TELEGRAPH
         self.params = params
         self.dead = False
 
@@ -693,6 +705,21 @@ class Player:
         # 9 segments de cape avec contraintes de distance
         self.cape_segments = [(x, y + 20 + i * 4) for i in range(9)]
 
+        # Sons
+        _base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+        try:
+            self._snd_jump = pygame.mixer.Sound(
+                os.path.join(_base, "assets", "sounds", "jump.mp3"))
+            self._snd_jump.set_volume(0.55)
+        except Exception:
+            self._snd_jump = None
+        try:
+            self._snd_swap = pygame.mixer.Sound(
+                os.path.join(_base, "assets", "sounds", "swap.mp3"))
+            self._snd_swap.set_volume(0.65)
+        except Exception:
+            self._snd_swap = None
+
     def center(self):
         return self.rect.center
 
@@ -718,6 +745,7 @@ class Player:
             self.on_ground = False
             self.coyote = 0
             self.jumps_used = 1
+            if self._snd_jump: self._snd_jump.play()
             burst(particles, self.rect.centerx, self.rect.bottom, 8,
                   pal_part(self.dimension), 3.0, 18, 0.2, 3)
             return "JUMP"
@@ -725,6 +753,7 @@ class Player:
         if self.jumps_used < self.max_jumps:
             self.vy = JUMP_FORCE * 0.92
             self.jumps_used += 1
+            if self._snd_jump: self._snd_jump.play()
             burst(particles, self.rect.centerx, self.rect.bottom, 12,
                   pal_part(self.dimension), 4.0, 22, 0.1, 3)
             return "DOUBLE"
@@ -771,6 +800,7 @@ class Player:
         self.swap_invuln = SWAP_INVULN_FRAMES
         self.invuln = max(self.invuln, SWAP_INVULN_FRAMES)
         self.dream_stay_t = 0   # reset chrono à chaque switch
+        if self._snd_swap: self._snd_swap.play()
         cx, cy = self.rect.center
         burst(particles, cx, cy, 50, pal_part(self.dimension), 9.0, 45, 0.0, 5)
         burst(particles, cx, cy, 24, pal_accent(self.dimension), 6.0, 30, 0.0, 4)
@@ -1104,6 +1134,7 @@ class MoonBoss:
         self.post_dr = False             # defense buff after DR (arrows deal half dmg)
         self.final_blow_active = False   # cinématique fin divine à ≤50 HP
         self.final_blow_t = 0
+        self.pause_timer = 0
 
         # Chargement du sprite de la Lune (moon_sprite.png dans le même dossier)
         _base_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -1114,6 +1145,22 @@ class MoonBoss:
             self._moon_sprite = pygame.transform.scale(_raw, (self.radius * 2, self.radius * 2))
         except Exception:
             self._moon_sprite = None  # fallback dessin procédural si fichier absent
+
+        # Son de laser
+        try:
+            self._snd_laser = pygame.mixer.Sound(
+                os.path.join(_base_dir, "assets", "sounds", "laser.mp3"))
+            self._snd_laser.set_volume(0.50)
+        except Exception:
+            self._snd_laser = None
+
+        # Son Derniers Recours
+        try:
+            self._snd_last_resort = pygame.mixer.Sound(
+                os.path.join(_base_dir, "assets", "sounds", "last_resort.mp3"))
+            self._snd_last_resort.set_volume(0.80)
+        except Exception:
+            self._snd_last_resort = None
 
         # Compteurs de pattern rotatif par phase
         self.p1_step = 0
@@ -1140,6 +1187,13 @@ class MoonBoss:
         if self.hit_flash > 0: self.hit_flash -= 1
         if self.stun_timer > 0:
             self.stun_timer -= 1
+            return
+
+        # Pause entre les animations phase 5
+        if self.pause_timer > 0:
+            self.pause_timer -= 1
+            if self.pause_timer == 0 and self.post_dr and not self.final_blow_active:
+                self.game._play_music("boss_moon_p2.mp3")
             return
 
         if self.state == "intro":
@@ -1273,6 +1327,7 @@ class MoonBoss:
                     # hits_any_dim=True : inévitable par changement de dimension
                     beams.append(Beam(rect, DIM_REAL, life=32, dmg=3,
                                       color=(255, 240, 210), hits_any_dim=True))
+                    if self._snd_laser: self._snd_laser.play()
                     burst(particles, tx, 280, 35, Pal.BEAM_FILL, 9.0, 50, 0.05, 5)
                     burst(particles, tx, 540, 35, Pal.BEAM_EDGE, 9.0, 50, 0.05, 5)
                     self.game.add_shake(16, 22)
@@ -1433,11 +1488,16 @@ class MoonBoss:
         # ── FINAL BLOW : déclenché au 2ème DR (post_dr=True, hp≤50) ─────────
         if (self.post_dr and self.hp <= 50 and
                 not self.final_blow_active and not self.pre_dr_active):
+            self.pause_timer = 0
             self.final_blow_active = True
             self.final_blow_t = 0
             self._lr_ox = self.x
             self._lr_oy = self.y
             self.game.add_shake(30, 60)
+            try:
+                pygame.mixer.music.fadeout(2000)
+            except Exception:
+                pass
             return
 
         if self.final_blow_active:
@@ -1474,7 +1534,7 @@ class MoonBoss:
         self.dim_timer -= 1
         if self.dim_timer <= 0:
             self.dim = DIM_DREAM if self.dim == DIM_REAL else DIM_REAL
-            self.dim_timer = 50 if self.final_form else 72
+            self.dim_timer = 55 if self.final_form else 80
 
         # ── SÉQUENCE PRINCIPALE (6 étapes fixes, difficile mais apprenables) ──
         self.attack_timer -= 1
@@ -1508,10 +1568,10 @@ class MoonBoss:
 
             elif step == 1:
                 # Étape 1 — GRAND ÉVENTAIL
-                count = 14 if self.final_form else 12
+                count = 13 if self.final_form else 10
                 self._tg_crescent_fan(player, projectiles, telegraphs,
                                       dim=self.dim, count=count, spread_deg=140)
-                self.attack_timer = int(42 * spd)
+                self.attack_timer = int(46 * spd)
 
             elif step == 2:
                 # Étape 2 — ORBES GUIDÉES
@@ -1520,27 +1580,27 @@ class MoonBoss:
                 self._fire_homing_orb(player, projectiles, self.dim)
                 if self.final_form:
                     self._fire_homing_orb(player, projectiles, self.dim)
-                self.attack_timer = int(38 * spd)
+                self.attack_timer = int(44 * spd)
 
             elif step == 3:
                 # Étape 3 — GASTERS CARDINAUX
                 n = 7 if self.final_form else 5
                 self._cast_gaster_blasters(player, beams, telegraphs, particles, n=n)
-                self.attack_timer = int(50 * spd)
+                self.attack_timer = int(52 * spd)
 
             elif step == 4:
                 # Étape 4 — DOUBLE RIDEAU D'ÉTOILES
                 self._tg_star_curtain(player, projectiles, telegraphs, hits_any_dim=True)
                 self._tg_star_curtain(player, projectiles, telegraphs, hits_any_dim=True)
-                self.attack_timer = int(54 * spd)
+                self.attack_timer = int(58 * spd)
 
             else:
                 # Étape 5 — DOUBLE ÉVENTAIL (real + dream simultanés) → fin de cycle
                 self._tg_crescent_fan(player, projectiles, telegraphs,
-                                      dim=DIM_REAL, count=10, spread_deg=120)
+                                      dim=DIM_REAL, count=8, spread_deg=120)
                 self._tg_crescent_fan(player, projectiles, telegraphs,
-                                      dim=DIM_DREAM, count=10, spread_deg=120)
-                self.attack_timer = int(38 * spd)
+                                      dim=DIM_DREAM, count=8, spread_deg=120)
+                self.attack_timer = int(44 * spd)
 
 
         # ── ORBE PARRY : cadence fixe, toujours viseuse → apprenable ──
@@ -1704,6 +1764,7 @@ class MoonBoss:
             rect = pygame.Rect(int(left), int(y - 30), int(right - left), 60)
             beams.append(Beam(rect, dim, life=22,
                               color=(Pal.MOON_GLOW if dim == DIM_REAL else (255, 180, 220))))
+            if self._snd_laser: self._snd_laser.play()
         telegraphs.append(Telegraph("beam_h", 50, dim, on_fire=fire,
                                     color=Pal.TELEGRAPH, y=y, left=left, right=right,
                                     final_height=60))
@@ -1713,20 +1774,20 @@ class MoonBoss:
             rect = pygame.Rect(int(x - width / 2), self.ay_top,
                                int(width), self.ay_bottom - self.ay_top + 400)
             beams.append(Beam(rect, dim, life=22, dmg=dmg, hits_any_dim=hits_any_dim, red=red))
+            if self._snd_laser: self._snd_laser.play()
         telegraphs.append(Telegraph("beam_v", duration, dim, on_fire=fire,
-                                    color=Pal.TELEGRAPH, x=x,
-                                    top=self.ay_top, bottom=self.ay_bottom + 400,
-                                    final_width=width))
+                                    x=x, top=self.ay_top, bottom=self.ay_bottom + 400,
+                                    final_width=width, hits_any_dim=hits_any_dim))
 
     def _tg_beam_horizontal(self, y, beams, telegraphs, dim=DIM_REAL, duration=70, height=60, dmg=3, hits_any_dim=False, red=False):
         def fire():
             rect = pygame.Rect(self.ax_left, int(y - height / 2),
                                self.ax_right - self.ax_left, int(height))
             beams.append(Beam(rect, dim, life=22, dmg=dmg, hits_any_dim=hits_any_dim, red=red))
+            if self._snd_laser: self._snd_laser.play()
         telegraphs.append(Telegraph("beam_h", duration, dim, on_fire=fire,
-                                    color=Pal.TELEGRAPH, y=y,
-                                    left=self.ax_left, right=self.ax_right,
-                                    final_height=height))
+                                    y=y, left=self.ax_left, right=self.ax_right,
+                                    final_height=height, hits_any_dim=hits_any_dim))
 
     def _fire_homing_orb(self, player, projectiles, dim):
         ang = random.uniform(0, math.tau)
@@ -1805,6 +1866,8 @@ class MoonBoss:
         elif t < 130:
             self.x = self._lr_ox
             self.y = self._lr_oy
+            if t == 111:
+                self.game._play_music("final_cinematic.mp3", fadein_ms=2000)
             if t == 80:
                 burst(particles, self.x, self.y, 300, (255, 255, 200), 20.0, 100, 0.0, 8)
                 burst(particles, self.x, self.y, 150, (255, 180, 80), 15.0, 80, 0.0, 6)
@@ -1849,6 +1912,7 @@ class MoonBoss:
             self.game.pre_dr_zoom_t = 0
             self.game.add_shake(24, 60)
             self.game.start_slowmo(35)
+            if self._snd_last_resort: self._snd_last_resort.play()
 
     def _update_last_resort(self, beams, telegraphs, particles):
         self.last_resort_t += 1
@@ -1917,7 +1981,7 @@ class MoonBoss:
                                int(self.ax_right - self.ax_left),
                                int(self.ay_bottom - self.ay_top + 600))
             beams.append(Beam(rect, DIM_REAL, life=70, dmg=10,
-                              hits_any_dim=True, color=(255, 50, 20), red=True))
+                              hits_any_dim=True, color=(255, 50, 20), red=True, once=True))
             # Faisceaux secondaires décoratifs
             for _off in (-50, 50):
                 r2 = pygame.Rect(
@@ -1936,7 +2000,7 @@ class MoonBoss:
                 80
             )
             beams.append(Beam(rect_h, DIM_REAL, life=60, dmg=6,
-                               hits_any_dim=True, red=True))
+                               hits_any_dim=True, red=True, once=True))
 
         # ── PHASE F : AFTERMATH court (t 186-260) ──
         elif t < 260:
@@ -1948,6 +2012,11 @@ class MoonBoss:
 
         # ── FIN : full heal, renaissance maudite ──
         if t >= 260:
+            self.pause_timer = 120
+            try:
+                pygame.mixer.music.fadeout(2500)
+            except Exception:
+                pass
             self.last_resort_active = False
             self.post_dr = True
             # Full heal dans la plage phase 5 (sans bonus HP)
@@ -2028,6 +2097,7 @@ class MoonBoss:
             self.phase = self.next_phase
             self.state = "fighting"
             self.transition_t = 0
+            self.pause_timer = 120 if self.phase == 5 else 0
             self.attack_timer = 60
             self.subattack_timer = 40
             self.dim_timer = 100
@@ -2457,6 +2527,92 @@ class Game:
         self.pre_dr_zoom_t = 0
         self.post_dr_dialog_t = 0
         self.final_blow_dialog_t = 0
+        self.settings_open = False
+        self._settings_path = os.path.join(os.path.expanduser("~"), ".dreamspawn_settings.json")
+        self.music_vol = 0.30
+        self.sfx_vol   = 0.55
+        self.controls_scroll = 0
+        self._load_settings()
+
+    def _load_settings(self):
+        try:
+            with open(self._settings_path, 'r') as f:
+                data = json.load(f)
+            self.music_vol = float(data.get("music_vol", 0.30))
+            self.sfx_vol   = float(data.get("sfx_vol",   0.55))
+        except Exception:
+            pass
+
+    def _save_settings(self):
+        try:
+            with open(self._settings_path, 'w') as f:
+                json.dump({"music_vol": self.music_vol, "sfx_vol": self.sfx_vol}, f)
+        except Exception:
+            pass
+
+    def _apply_sfx_vol(self):
+        snds = []
+        if self.player:
+            if getattr(self.player, '_snd_jump', None): snds.append(self.player._snd_jump)
+            if getattr(self.player, '_snd_swap', None): snds.append(self.player._snd_swap)
+        if self.boss and getattr(self.boss, '_snd_laser', None):
+            snds.append(self.boss._snd_laser)
+        for s in snds:
+            if s: s.set_volume(self.sfx_vol)
+
+    def draw_settings_overlay(self):
+        W, H = 420, 180
+        ox = (WIDTH - W) // 2
+        oy = (HEIGHT - H) // 2
+        panel = pygame.Surface((W, H), pygame.SRCALPHA)
+        panel.fill((10, 0, 25, 210))
+        pygame.draw.rect(panel, (120, 80, 200), (0, 0, W, H), 2)
+        self.screen.blit(panel, (ox, oy))
+        title = self.font_med.render("PARAMETRES AUDIO", True, (200, 160, 255))
+        self.screen.blit(title, (ox + W // 2 - title.get_width() // 2, oy + 14))
+        self._draw_slider(ox + 30, oy + 65,  W - 60, "MUSIQUE", self.music_vol)
+        self._draw_slider(ox + 30, oy + 120, W - 60, "EFFETS",  self.sfx_vol)
+        hint = self.font_sm.render("TAB pour fermer", True, (120, 100, 160))
+        self.screen.blit(hint, (ox + W // 2 - hint.get_width() // 2, oy + H - 22))
+
+    def _draw_slider(self, x, y, w, label, value):
+        lbl = self.font_sm.render(label, True, (180, 140, 240))
+        self.screen.blit(lbl, (x, y - 18))
+        pygame.draw.rect(self.screen, (50, 30, 80),  (x, y, w, 12), border_radius=6)
+        fill_w = int(w * value)
+        if fill_w > 0:
+            pygame.draw.rect(self.screen, (140, 80, 220), (x, y, fill_w, 12), border_radius=6)
+        cx = x + fill_w
+        pygame.draw.circle(self.screen, (220, 180, 255), (cx, y + 6), 9)
+        pygame.draw.circle(self.screen, (255, 255, 255), (cx, y + 6), 5)
+        pct = self.font_sm.render(f"{int(value*100)}%", True, (200, 180, 230))
+        self.screen.blit(pct, (x + w + 8, y - 2))
+
+    def handle_settings_mouse(self, mx, my):
+        W, H = 420, 180
+        ox = (WIDTH - W) // 2
+        oy = (HEIGHT - H) // 2
+        sw = W - 60
+        sx = ox + 30
+        if oy + 56 <= my <= oy + 80:
+            self.music_vol = max(0.0, min(1.0, (mx - sx) / sw))
+            try: pygame.mixer.music.set_volume(self.music_vol)
+            except: pass
+            self._save_settings()
+        if oy + 111 <= my <= oy + 135:
+            self.sfx_vol = max(0.0, min(1.0, (mx - sx) / sw))
+            self._apply_sfx_vol()
+            self._save_settings()
+
+    def _play_music(self, filename, volume=None, loops=-1, fadein_ms=1500):
+        _base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+        path  = os.path.join(_base, "assets", "music", filename)
+        try:
+            pygame.mixer.music.load(path)
+            pygame.mixer.music.set_volume(volume if volume is not None else self.music_vol)
+            pygame.mixer.music.play(loops, fade_ms=fadein_ms)
+        except Exception:
+            pass
 
     def toggle_fullscreen(self):
         self.fullscreen = not self.fullscreen
@@ -2573,6 +2729,8 @@ class Game:
                             if len(self.god_input) < 4:
                                 self.god_input += event.unicode
                         continue
+                    if event.key == pygame.K_TAB:
+                        self.settings_open = not self.settings_open
                     if event.key == pygame.K_ESCAPE:
                         if self.state == STATE_TITLE:
                             running = False
@@ -2606,6 +2764,10 @@ class Game:
                     if event.key == pygame.K_SPACE and self.state in (STATE_HUB, STATE_MOON):
                         self.player.release_jump()
                 elif event.type == pygame.MOUSEBUTTONDOWN and self.state == STATE_TITLE:
+                    if self.settings_open:
+                        self.handle_settings_mouse(event.pos[0], event.pos[1])
+                    if self.show_controls_popup and event.button in (4, 5):
+                        self.controls_scroll += -1 if event.button == 4 else 1
                     if event.button == 1:
                         if self.start_btn_rect.collidepoint(event.pos):
                             self.phase5_mode = False
@@ -2614,10 +2776,17 @@ class Game:
                             self.phase5_mode = True
                             self.start_hub()
                 elif event.type == pygame.MOUSEBUTTONDOWN and self.state in (STATE_HUB, STATE_MOON):
+                    if self.settings_open:
+                        self.handle_settings_mouse(event.pos[0], event.pos[1])
+                    if self.show_controls_popup and event.button in (4, 5):
+                        self.controls_scroll += -1 if event.button == 4 else 1
                     if event.button == 1:
                         mx, my = event.pos
                         a = self.player.fire_bow(mx, my, self.cam)
                         if a: self.arrows.append(a)
+                elif event.type == pygame.MOUSEMOTION:
+                    if self.settings_open and pygame.mouse.get_pressed()[0]:
+                        self.handle_settings_mouse(event.pos[0], event.pos[1])
 
             do_update = True
             if self.slowmo > 0:
@@ -2646,6 +2815,9 @@ class Game:
 
             if self.show_god_dialog:
                 self.draw_god_dialog()
+
+            if self.settings_open:
+                self.draw_settings_overlay()
 
             pygame.display.flip()
 
@@ -2719,8 +2891,10 @@ class Game:
 
         # Beams → player (b.dmg, hits_any_dim ignore le filtre de dim)
         for b in self.beams:
+            if b.once and b._hit_done: continue
             if (b.hits_any_dim or b.dim == self.player.dimension) and b.rect.colliderect(self.player.rect):
                 if self.player.hurt(b.dmg):
+                    if b.once: b._hit_done = True
                     self.add_shake(8 + b.dmg * 4, 10 + b.dmg * 3)
                     burst(self.particles, self.player.rect.centerx, self.player.rect.centery,
                           24 + b.dmg * 8, Pal.HP_FILL, 5.0, 28, 0.15, 4)
@@ -2757,6 +2931,7 @@ class Game:
                                 self.add_shake(3, 4)
                         else:
                             arrow_dmg = max(1, a.dmg // 2) if (self.boss and self.boss.post_dr) else a.dmg
+                            if self.god_mode: arrow_dmg *= 4
                             dmg_done = self.boss.take_dmg(arrow_dmg, self.player.dimension, self.particles)
                             if dmg_done > 0:
                                 self.damage_numbers.append(
@@ -3369,30 +3544,59 @@ class Game:
 
         # Popup contrôles
         if self.show_controls_popup:
-            lines = [
-                ("ESPACE",       "Saut  /  Double saut  /  3× en l'air = changer de dimension"),
-                ("A  ou  MAJ",   "Dash  —  traverse les projectiles roses = PARRY"),
-                ("Clic gauche",  "Tirer une flèche  (maintenir = charge)"),
-                ("F  ou  F11",   "Plein écran"),
-                ("ÉCHAP",        "Retour au titre / quitter"),
+            ctrl_lines = [
+                ("ESPACE",        "Saut  /  Double saut"),
+                ("ESPACE x3",     "3x en l'air = changer de dimension (swap)"),
+                ("A  ou  MAJ",    "Dash  —  traverse les projectiles roses = PARRY"),
+                ("Clic gauche",   "Tirer une fleche  (maintenir = charge)"),
+                ("TAB",           "Ouvrir les parametres de volume"),
+                ("F  ou  F11",    "Plein ecran"),
+                ("ECHAP",         "Retour au titre / quitter"),
+                ("", ""),
+                ("COULEURS TELEGRAPHS", ""),
+                ("Bleu",          "Attaque dans le monde REEL"),
+                ("Rose",          "Attaque dans le monde REVE"),
+                ("Orange",        "Attaque INEVITABLE (touche les 2 mondes)"),
             ]
-            pad = 28
-            lh = 30
-            panel_w = 680
-            panel_h = pad * 2 + len(lines) * lh + 10
+            pad = 24
+            lh = 28
+            max_visible = 7
+            panel_w = 720
+            panel_h = pad * 2 + max_visible * lh + 10
             panel_x = WIDTH // 2 - panel_w // 2
-            panel_y = HEIGHT // 2 + 70
+            panel_y = HEIGHT // 2 + 60
+            max_scroll = max(0, len(ctrl_lines) - max_visible)
+            self.controls_scroll = max(0, min(self.controls_scroll, max_scroll))
             panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
-            panel.fill((12, 6, 28, 210))
+            panel.fill((12, 6, 28, 215))
             self.screen.blit(panel, (panel_x, panel_y))
             pygame.draw.rect(self.screen, (100, 60, 200),
                              (panel_x, panel_y, panel_w, panel_h), 2, border_radius=8)
-            for i, (key, action) in enumerate(lines):
+            clip_rect = pygame.Rect(panel_x + 2, panel_y + 2, panel_w - 4, panel_h - 4)
+            old_clip = self.screen.get_clip()
+            self.screen.set_clip(clip_rect)
+            visible = ctrl_lines[self.controls_scroll: self.controls_scroll + max_visible]
+            for i, (key, action) in enumerate(visible):
                 ky = panel_y + pad + i * lh
-                k_surf = self.font_sm.render(key, True, (200, 180, 255))
-                a_surf = self.font_sm.render(action, True, Pal.UI_DIM)
+                if key == "COULEURS TELEGRAPHS":
+                    s = self.font_sm.render("--- COULEURS DES TELEGRAPHS ---", True, (180, 150, 255))
+                    self.screen.blit(s, (panel_x + 18, ky))
+                    continue
+                if key == "":
+                    continue
+                if key == "Bleu":   col_key = (80, 160, 255)
+                elif key == "Rose": col_key = (255, 100, 200)
+                elif key == "Orange": col_key = (255, 185, 45)
+                else: col_key = (200, 180, 255)
+                k_surf = self.font_sm.render(key, True, col_key)
+                a_surf = self.font_sm.render(action, True, (160, 150, 200))
                 self.screen.blit(k_surf, (panel_x + 18, ky))
-                self.screen.blit(a_surf, (panel_x + 190, ky))
+                self.screen.blit(a_surf, (panel_x + 200, ky))
+            self.screen.set_clip(old_clip)
+            if max_scroll > 0:
+                hint = self.font_sm.render(f"Molette pour defiler  ({self.controls_scroll+1}/{max_scroll+1})", True, (120, 100, 160))
+                self.screen.blit(hint, (panel_x + panel_w // 2 - hint.get_width() // 2,
+                                        panel_y + panel_h - 20))
 
     def draw_gameover(self):
         overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
