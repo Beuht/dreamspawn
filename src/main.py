@@ -3561,60 +3561,112 @@ class Game:
 
     def draw_boss_ui(self):
         if not self.boss: return
-        bw, bh = 380, 10
+
+        # ── Dimensions ────────────────────────────────────────────────────────
+        bw, bh = 360, 8          # longueur et hauteur de la barre intérieure
         bx = WIDTH // 2 - bw // 2
-        by = 36   # un peu en dessous du bord haut
+        by = 34
 
-        # Couleur selon la phase
-        if self.boss.phase == 5:
-            col = (255, 30, 80) if self.boss.final_form else (200, 60, 120)
+        # Embouts dorés (plus hauts que la barre, style pixel-art)
+        cap_w, cap_h = 10, bh + 8   # largeur et hauteur de chaque embout
+        cap_y = by - (cap_h - bh) // 2
+        GOLD1  = (230, 185, 55)      # doré principal
+        GOLD2  = (255, 225, 100)     # reflet clair
+        GOLD3  = (140, 100, 20)      # ombre foncée
+        DARK   = (12,  8,   4)       # fond intérieur très sombre
+
+        # ── Couleur du remplissage selon la phase ─────────────────────────────
+        if self.boss.last_resort_active:
+            pulse  = abs(math.sin(self.frame * 0.18))
+            col    = (int(210 + 45 * pulse), int(18 * (1 - pulse)), 18)
+        elif self.boss.phase == 5:
+            col = (220, 25, 70) if self.boss.final_form else (185, 50, 110)
         elif self.boss.phase == 4: col = Pal.BOSS_HP_D
-        elif self.boss.phase == 3: col = (160, 160, 220)
-        else: col = Pal.BOSS_HP
+        elif self.boss.phase == 3: col = (140, 140, 210)
+        else:                       col = Pal.BOSS_HP
 
-        # Fond
-        pygame.draw.rect(self.screen, Pal.BOSS_HP_BG, (bx, by, bw, bh), border_radius=6)
-        # Remplissage par phase (s'anime 0→1 à chaque transition)
         frac = self.boss.display_bar_fraction()
-        pygame.draw.rect(self.screen, col, (bx, by, int(bw * frac), bh), border_radius=6)
-        # Contour
-        pygame.draw.rect(self.screen, Pal.UI, (bx, by, bw, bh), 2, border_radius=6)
 
-        # Nom au-dessus
+        # ── Fond de la barre ──────────────────────────────────────────────────
+        pygame.draw.rect(self.screen, DARK, (bx, by, bw, bh))
+
+        # ── Remplissage HP ────────────────────────────────────────────────────
+        fill_w = max(0, int(bw * frac))
+        if fill_w > 0:
+            # Corps principal
+            pygame.draw.rect(self.screen, col, (bx, by, fill_w, bh))
+            # Reflet clair sur le dessus (1px)
+            r2 = tuple(min(255, c + 55) for c in col)
+            pygame.draw.line(self.screen, r2, (bx, by), (bx + fill_w - 1, by), 1)
+            # Ombre en bas (1px)
+            r3 = tuple(max(0, c - 60) for c in col)
+            pygame.draw.line(self.screen, r3,
+                             (bx, by + bh - 1), (bx + fill_w - 1, by + bh - 1), 1)
+
+        # ── Contour doré de la barre ──────────────────────────────────────────
+        pygame.draw.rect(self.screen, GOLD1, (bx, by, bw, bh), 1)
+
+        # ── Embout gauche ─────────────────────────────────────────────────────
+        lx = bx - cap_w
+        # Corps
+        pygame.draw.rect(self.screen, GOLD1, (lx, cap_y, cap_w, cap_h))
+        # Reflet haut
+        pygame.draw.line(self.screen, GOLD2, (lx, cap_y), (lx + cap_w - 1, cap_y), 1)
+        pygame.draw.line(self.screen, GOLD2, (lx, cap_y), (lx, cap_y + cap_h - 1), 1)
+        # Ombre bas-droite
+        pygame.draw.line(self.screen, GOLD3,
+                         (lx, cap_y + cap_h - 1), (lx + cap_w - 1, cap_y + cap_h - 1), 1)
+        pygame.draw.line(self.screen, GOLD3,
+                         (lx + cap_w - 1, cap_y), (lx + cap_w - 1, cap_y + cap_h - 1), 1)
+        # Pixel d'accent central (brillant)
+        pygame.draw.rect(self.screen, GOLD2,
+                         (lx + 2, cap_y + cap_h // 2 - 1, cap_w - 4, 2))
+
+        # ── Embout droit ──────────────────────────────────────────────────────
+        rx = bx + bw
+        pygame.draw.rect(self.screen, GOLD1, (rx, cap_y, cap_w, cap_h))
+        pygame.draw.line(self.screen, GOLD2, (rx, cap_y), (rx + cap_w - 1, cap_y), 1)
+        pygame.draw.line(self.screen, GOLD2, (rx, cap_y), (rx, cap_y + cap_h - 1), 1)
+        pygame.draw.line(self.screen, GOLD3,
+                         (rx, cap_y + cap_h - 1), (rx + cap_w - 1, cap_y + cap_h - 1), 1)
+        pygame.draw.line(self.screen, GOLD3,
+                         (rx + cap_w - 1, cap_y), (rx + cap_w - 1, cap_y + cap_h - 1), 1)
+        pygame.draw.rect(self.screen, GOLD2,
+                         (rx + 2, cap_y + cap_h // 2 - 1, cap_w - 4, 2))
+
+        # ── Nom du boss au-dessus ─────────────────────────────────────────────
         name = self.font_sm.render(f"LA LUNE  —  Phase {self.boss.phase}", True, Pal.UI)
-        self.screen.blit(name, name.get_rect(midbottom=(WIDTH // 2, by - 2)))
+        self.screen.blit(name, name.get_rect(midbottom=(WIDTH // 2, by - 3)))
 
-        # Phase 2 : dimension vulnérable
+        # ── Phase 2 : dimension vulnérable ───────────────────────────────────
         if self.boss.phase == 2 and self.boss.state == "fighting":
             dlbl = "Vulnérable : " + ("RÉALITÉ" if self.boss.dim == DIM_REAL else "RÊVE BRISÉ")
             dc = pal_accent(self.boss.dim)
             s = self.font_sm.render(dlbl, True, dc)
-            self.screen.blit(s, s.get_rect(midtop=(WIDTH // 2, by + bh + 4)))
+            self.screen.blit(s, s.get_rect(midtop=(WIDTH // 2, cap_y + cap_h + 3)))
 
+        # ── Derniers Recours ─────────────────────────────────────────────────
         if self.boss.last_resort_active:
-            t = self.boss.last_resort_t
-            # Barre de boss rouge vif pulsante pendant la séquence
+            t    = self.boss.last_resort_t
             pulse = abs(math.sin(self.frame * 0.18))
-            warn_col = (int(200 + 55 * pulse), int(20 * pulse), 20)
-            pygame.draw.rect(self.screen, warn_col, (bx, by, bw, bh), border_radius=6)
-            pygame.draw.rect(self.screen, (255, 100, 50), (bx, by, bw, bh), 2, border_radius=6)
-            w_surf = self.font_sm.render("⚠  DERNIERS RECOURS  ⚠", True, (255, int(80 + 80 * pulse), 20))
-            self.screen.blit(w_surf, w_surf.get_rect(midtop=(WIDTH // 2, by + bh + 4)))
-            # Compteur de phase
+            w_surf = self.font_sm.render("⚠  DERNIERS RECOURS  ⚠",
+                                         True, (255, int(80 + 80 * pulse), 20))
+            self.screen.blit(w_surf, w_surf.get_rect(midtop=(WIDTH // 2, cap_y + cap_h + 3)))
             if t < 185:
                 phase_names = {0: "CRISE", 50: "FUITE", 110: "VIDE", 155: "RETOUR"}
                 phase_str = "CRISE"
-                for threshold, name in sorted(phase_names.items()):
+                for threshold, pname in sorted(phase_names.items()):
                     if t >= threshold:
-                        phase_str = name
+                        phase_str = pname
                 ps = self.font_sm.render(phase_str, True, (255, 150, 80))
-                self.screen.blit(ps, ps.get_rect(midtop=(WIDTH // 2, by + bh + 24)))
+                self.screen.blit(ps, ps.get_rect(midtop=(WIDTH // 2, cap_y + cap_h + 20)))
 
-        # Indicateur post-DR
-        if self.boss and self.boss.post_dr:
+        # ── Post-DR ───────────────────────────────────────────────────────────
+        if self.boss and self.boss.post_dr and not self.boss.last_resort_active:
             def_s = self.font_sm.render("DEFENSE ACCRUE  fleches -50%", True, (255, 100, 80))
-            self.screen.blit(def_s, def_s.get_rect(midtop=(WIDTH // 2, by + bh + 24)))
-        # God mode indicator
+            self.screen.blit(def_s, def_s.get_rect(midtop=(WIDTH // 2, cap_y + cap_h + 3)))
+
+        # ── God mode ──────────────────────────────────────────────────────────
         if self.god_mode:
             gm_s = self.font_sm.render("GOD MODE", True, (100, 255, 120))
             self.screen.blit(gm_s, gm_s.get_rect(topright=(WIDTH - 8, 6)))
