@@ -2201,6 +2201,12 @@ class MoonBoss:
         return actual
 
     def draw(self, surf, cam, current_dim):
+        # Invisible dès l'explosion de la cinématique finale (phase E, t=211)
+        if self.final_blow_active and self.final_blow_t >= 211:
+            return
+        if self.dead:
+            return
+
         if self.phase == 4:
             for f in self.fragments:
                 if not f.dead:
@@ -2878,9 +2884,13 @@ class Game:
                 self.draw_hub_overlay()
             elif self.state == STATE_MOON:
                 if do_update: self.update_moon()
-                self.draw_world(in_arena=True)
-                self.draw_boss_ui()
-                self.draw_announce()
+                if self.final_blow_hub_t > 0:
+                    # Écran noir + "CE N'EST PAS LE MOMENT VENU" — rien d'autre
+                    self._draw_victory_overlay()
+                else:
+                    self.draw_world(in_arena=True)
+                    self.draw_boss_ui()
+                    self.draw_announce()
             elif self.state == STATE_GAMEOVER:
                 self.draw_world(in_arena=(self.boss is not None))
                 self.draw_gameover()
@@ -3290,9 +3300,7 @@ class Game:
                     prog = 0.0
                 self._draw_divine_hand(self.divine_hand_x, self.divine_hand_y, prog)
 
-        # ── Victoire post-boss : overlay + auto-hub ─────────────────────────
-        if in_arena and self.final_blow_hub_t > 0:
-            self._draw_victory_overlay()
+        # (overlay victoire géré dans la boucle principale, pas ici)
 
         # ── Post-DR dialogue ────────────────────────────────────────────────────
         if in_arena and self.post_dr_dialog_t > 0:
@@ -3800,23 +3808,43 @@ class Game:
         self.screen.blit(s, (0, 0))
 
     def _draw_victory_overlay(self):
-        """Overlay fondu au noir + texte victoire pendant les 5 sec post-boss."""
+        """Écran noir + 'CE N'EST PAS LE MOMENT VENU' en doré, 5 sec → hub."""
         t = self.final_blow_hub_t
-        # Fondu progressif
-        fade_a = min(200, int(200 * t / 80)) if t < 80 else 200
-        ov = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        ov.fill((0, 0, 0, fade_a))
-        self.screen.blit(ov, (0, 0))
-        # Texte qui apparaît après 30 frames
-        if t > 30:
-            txt_a = min(255, int(255 * (t - 30) / 40))
-            title = self.font_announce.render("LA LUNE EST TOMBÉE", True, (255, 230, 180))
-            title.set_alpha(txt_a)
-            self.screen.blit(title, title.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 30)))
+
+        # Fond noir plein (opaque) dès le début
+        self.screen.fill((0, 0, 0))
+
+        # Titre principal : fade-in progressif (0-60 frames)
+        txt_a = min(255, int(255 * t / 60))
+
+        # Ligne 1 : "CE N'EST PAS"
+        line1 = self.font_big.render("CE N'EST PAS", True, (255, 215, 80))
+        line1.set_alpha(txt_a)
+        self.screen.blit(line1, line1.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 60)))
+
+        # Ligne 2 : "LE MOMENT VENU" — légèrement plus petite, décalée
+        line2 = self.font_big.render("LE MOMENT VENU", True, (255, 200, 60))
+        line2.set_alpha(txt_a)
+        self.screen.blit(line2, line2.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 10)))
+
+        # Séparateur doré
+        if txt_a > 80:
+            sep_a = min(180, txt_a - 80)
+            sep_s = pygame.Surface((400, 2), pygame.SRCALPHA)
+            sep_s.fill((255, 200, 60, sep_a))
+            self.screen.blit(sep_s, sep_s.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 80)))
+            self.screen.blit(sep_s, sep_s.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 70)))
+
+        # Sous-titre : compte à rebours (apparaît après 90 frames)
+        if t > 90:
+            sub_a = min(180, int(180 * (t - 90) / 40))
             secs = max(0, (300 - t) // 60 + 1)
-            sub = self.font_med.render(f"Retour au sanctuaire dans {secs}…   R — maintenant", True, (200, 180, 140))
-            sub.set_alpha(txt_a)
-            self.screen.blit(sub, sub.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 35)))
+            sub = self.font_med.render(
+                f"Retour au sanctuaire dans {secs}…   R — maintenant",
+                True, (200, 175, 100)
+            )
+            sub.set_alpha(sub_a)
+            self.screen.blit(sub, sub.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 110)))
 
 
 def main():
