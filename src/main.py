@@ -3566,19 +3566,21 @@ class Game:
 
         # Bouclier (shield) — barre verte sous la barre HP
         if self.player.shield > 0:
-            sh = 8
-            sy2 = y + h + 3
+            sh     = 8
+            sh_x   = hfx + self._hero_fill_x0
+            sh_w   = self._hero_fill_w
+            sy2    = hbar_screen_y + 10
             shield_frac = min(1.0, self.player.shield / 10)
-            pygame.draw.rect(self.screen, (20, 60, 30), (x, sy2, w, sh), border_radius=4)
-            pygame.draw.rect(self.screen, (60, 220, 100), (x, sy2, int(w * shield_frac), sh), border_radius=4)
-            pygame.draw.rect(self.screen, (120, 255, 150), (x, sy2, w, sh), 1, border_radius=4)
+            pygame.draw.rect(self.screen, (20, 60, 30),    (sh_x, sy2, sh_w, sh), border_radius=4)
+            pygame.draw.rect(self.screen, (60, 220, 100),  (sh_x, sy2, int(sh_w * shield_frac), sh), border_radius=4)
+            pygame.draw.rect(self.screen, (120, 255, 150), (sh_x, sy2, sh_w, sh), 1, border_radius=4)
             sh_lbl = self.font_sm.render(f"BOUCLIER  {self.player.shield}", True, (120, 255, 150))
-            self.screen.blit(sh_lbl, (x + 8, sy2 - 1))
+            self.screen.blit(sh_lbl, (sh_x + 4, sy2 - 1))
 
         lbl = "RÉALITÉ" if self.player.dimension == DIM_REAL else "RÊVE BRISÉ"
         col = pal_accent(self.player.dimension)
         d_surf = self.font_sm.render(lbl, True, col)
-        self.screen.blit(d_surf, (x + 8, y + h + 4))   # sous la barre HP joueur
+        self.screen.blit(d_surf, (hfx + self._hero_fill_x0 + 4, hbar_screen_y + 10))
 
         cd_w = 220
         cd_x = WIDTH // 2 - cd_w // 2
