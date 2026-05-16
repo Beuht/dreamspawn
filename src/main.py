@@ -43,8 +43,29 @@ import pygame
 # Constantes
 # ---------------------------------------------------------------------------
 
-WIDTH, HEIGHT = 1280, 720
+WIDTH, HEIGHT   = 1280, 720
+DISPLAY_W, DISPLAY_H = WIDTH, HEIGHT
+SCALE_X = 1.0
+SCALE_Y = 1.0
 FPS = 60
+
+# ── Sprite Frounette — bornes mesurées en pixels source (frame 100×100) ──────
+# walk union : x=41..57 (w=17), y=38..59 (h=22)
+SPR_SCALE       = 2.6     # ×2.6 (légèrement réduit)
+SPR_CHAR_X0     = 41      # bord gauche du perso dans frame src
+SPR_CHAR_Y0     = 38      # bord haut (tête) dans frame src
+SPR_CHAR_W      = 17      # largeur perso en pixels src
+# Les pixels y=55-59 sont l'ombre intégrée au sprite (couleur 83,69,69).
+# Les vraies bottes finissent à y=54. On ancre là pour que les pieds touchent le sol.
+# L'ombre intégrée (15 px écran) se dépose naturellement sur la plateforme.
+SPR_CHAR_FEET_Y = 54      # y bas des bottes (sans l'ombre built-in du sprite)
+SPR_CHAR_H      = SPR_CHAR_FEET_Y - SPR_CHAR_Y0 + 1    # 17 px — hauteur corps seul
+# Hitbox = corps visible (bottes incluses, ombre exclue)
+PLAYER_W = SPR_CHAR_W * SPR_SCALE                        # 51
+PLAYER_H = SPR_CHAR_H * SPR_SCALE                        # 51
+# Offsets de blit (ancre = bas du pixel pied → bas du bloc 3×3 = +1 src px)
+SPR_BLIT_OX       = SPR_CHAR_X0 * SPR_SCALE             # 123 — bord gauche
+SPR_BLIT_FEET_OY  = (SPR_CHAR_FEET_Y + 1) * SPR_SCALE   # 165 — bas du bloc pied
 
 GRAVITY = 0.62
 MAX_FALL = 17.0
@@ -227,12 +248,25 @@ class DustField:
 # ---------------------------------------------------------------------------
 
 class Arrow:
+    _sprite = None   # classe : chargé une fois, réutilisé
+
     def __init__(self, x, y, vx, vy, dmg=1, dim=DIM_REAL):
         self.x = x; self.y = y
         self.vx = vx; self.vy = vy
         self.dmg = dmg
         self.dim = dim
         self.life = ARROW_LIFETIME
+        # Chargement unique de l'asset flèche
+        if Arrow._sprite is None:
+            try:
+                _base = getattr(sys, '_MEIPASS',
+                                os.path.dirname(os.path.abspath(__file__)))
+                _raw = pygame.image.load(
+                    os.path.join(_base, "assets", "images", "arrow.png")
+                ).convert_alpha()
+                Arrow._sprite = pygame.transform.scale(_raw, (48, 48))
+            except Exception:
+                Arrow._sprite = False   # sentinel : ne plus retenter
         self.dead = False
         self.pierce = min(1, max(0, dmg - 2))   # 1 pierce sur les flèches puissantes
         self.size = 3 + min(dmg, 4)
@@ -250,18 +284,22 @@ class Arrow:
     def draw(self, surf, cam):
         ang = math.atan2(self.vy, self.vx)
         cx, cy = self.x - cam[0], self.y - cam[1]
-        if self.dmg >= 3:   col = Pal.ARROW_CH2
-        elif self.dmg >= 2: col = Pal.ARROW_CH1
-        else: col = Pal.ARROW
-        length = 12 + self.dmg * 4
-        x2 = cx - math.cos(ang) * length
-        y2 = cy - math.sin(ang) * length
-        pygame.draw.line(surf, col, (cx, cy), (x2, y2), 2 + self.dmg)
-        pygame.draw.circle(surf, col, (int(cx), int(cy)), 2 + self.dmg)
-        if self.dmg >= 2:
-            s = pygame.Surface((24, 24), pygame.SRCALPHA)
-            pygame.draw.circle(s, (*col, 80), (12, 12), 11)
-            surf.blit(s, (int(cx) - 12, int(cy) - 12))
+        if Arrow._sprite:
+            # Rotation du sprite selon la direction de vol
+            ang_deg = -math.degrees(ang)
+            rotated = pygame.transform.rotate(Arrow._sprite, ang_deg)
+            r = rotated.get_rect(center=(int(cx), int(cy)))
+            surf.blit(rotated, r)
+        else:
+            # Fallback procédural si asset absent
+            if self.dmg >= 3:   col = Pal.ARROW_CH2
+            elif self.dmg >= 2: col = Pal.ARROW_CH1
+            else: col = Pal.ARROW
+            length = 12 + self.dmg * 4
+            x2 = cx - math.cos(ang) * length
+            y2 = cy - math.sin(ang) * length
+            pygame.draw.line(surf, col, (cx, cy), (x2, y2), 2 + self.dmg)
+            pygame.draw.circle(surf, col, (int(cx), int(cy)), 2 + self.dmg)
 
 
 # ---------------------------------------------------------------------------
@@ -669,7 +707,7 @@ class HealOrb:
 
 class Player:
     def __init__(self, x, y):
-        self.rect = pygame.Rect(x, y, 28, 44)
+        self.rect = pygame.Rect(x, y, PLAYER_W, PLAYER_H)  # 68×88 — hitbox = contenu sprite
         self.vx = 0.0; self.vy = 0.0
         self.on_ground = False
         self.facing = 1
@@ -697,28 +735,55 @@ class Player:
         self.dimension = DIM_REAL
 
         self.bow_cd = 0   # cooldown unique, plus de charge
+        self._aim_angle = 0.0   # angle vers le curseur (radians, mis à jour chaque frame)
 
         self.score = 0
         self.spawn = (x, y)
         self.frame = 0
-        self.cape_history = deque(maxlen=12)
-        # 9 segments de cape avec contraintes de distance
-        self.cape_segments = [(x, y + 20 + i * 4) for i in range(9)]
 
         # Sons
         _base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
         try:
             self._snd_jump = pygame.mixer.Sound(
                 os.path.join(_base, "assets", "sounds", "jump.mp3"))
-            self._snd_jump.set_volume(0.55)
+            self._snd_jump.set_volume(0.15)
         except Exception:
             self._snd_jump = None
         try:
             self._snd_swap = pygame.mixer.Sound(
                 os.path.join(_base, "assets", "sounds", "swap.mp3"))
-            self._snd_swap.set_volume(0.65)
+            self._snd_swap.set_volume(0.15)
         except Exception:
             self._snd_swap = None
+
+        # ── Sprites de Frounette ─────────────────────────────────────────
+        _SPR_SCALE = SPR_SCALE  # ×3 → frames 300×300 (personnage 51×66 visible)
+
+        def _load_sheet(name, fw=100, fh=100):
+            """Découpe un spritesheet, redimensionne chaque frame à fw*scale × fh*scale."""
+            try:
+                sheet = pygame.image.load(
+                    os.path.join(_base, "assets", "images", name)
+                ).convert_alpha()
+                cols = sheet.get_width() // fw
+                nw   = int(fw * _SPR_SCALE)
+                nh   = int(fh * _SPR_SCALE)
+                frames = []
+                for c in range(cols):
+                    raw = sheet.subsurface(pygame.Rect(c * fw, 0, fw, fh))
+                    frames.append(pygame.transform.scale(raw, (nw, nh)))
+                return frames
+            except Exception:
+                return []
+
+        self._spr_walk   = _load_sheet("frounette_walk.png")    # 8 frames  → 200×200
+        self._spr_attack = _load_sheet("frounette_attack.png")  # 9 frames  → 200×200
+        self._spr_hurt   = _load_sheet("frounette_hurt.png")    # 4 frames  → 200×200
+        self._spr_death  = _load_sheet("frounette_death.png")   # 4 frames  → 200×200
+
+        # Machine à états d'animation
+        self._anim_state  = 'idle'   # 'idle' | 'walk' | 'attack' | 'hurt' | 'death'
+        self._anim_t      = 0        # compteur de frames dans l'état courant
 
     def center(self):
         return self.rect.center
@@ -733,6 +798,8 @@ class Player:
         self.swap_cooldown = 0; self.swap_invuln = 0; self.invuln = 0
         self.jumps_used = 0
         self.jump_history.clear()
+        self._anim_state = 'idle'
+        self._anim_t     = 0
 
     def press_jump(self, particles):
         self.jump_buffer = JUMP_BUFFER_FRAMES
@@ -792,6 +859,10 @@ class Player:
         vx = dx / d * ARROW_SPEED
         vy = dy / d * ARROW_SPEED
         self.facing = 1 if vx >= 0 else -1
+        # Animation d'attaque
+        if self._anim_state not in ('death', 'hurt'):
+            self._anim_state = 'attack'
+            self._anim_t = 0
         return Arrow(cx, cy, vx, vy, dmg=BOW_DAMAGE, dim=self.dimension)
 
     def swap_dimension(self, particles):
@@ -813,6 +884,10 @@ class Player:
             dmg -= absorbed
         self.hp -= dmg
         self.invuln = INVULN_FRAMES
+        # Animation de dégâts (si pas déjà en mort)
+        if self._anim_state != 'death':
+            self._anim_state = 'hurt'
+            self._anim_t = 0
         return True
 
     def heal(self, amount):
@@ -824,8 +899,45 @@ class Player:
         if overflow > 0:
             self.shield = min(self.shield + overflow, 10)
 
+    def _get_anim_frame(self):
+        """Retourne la surface sprite courante (ou None si assets absents)."""
+        SPD = {'idle': 8, 'walk': 6, 'attack': 5, 'hurt': 6, 'death': 9}
+        SHEETS = {
+            'idle':   self._spr_walk,
+            'walk':   self._spr_walk,
+            'attack': self._spr_attack,
+            'hurt':   self._spr_hurt,
+            'death':  self._spr_death,
+        }
+        state = self._anim_state
+        sheet = SHEETS.get(state, [])
+        if not sheet:
+            return None
+        spd   = SPD.get(state, 6)
+        n     = len(sheet)
+        idx   = self._anim_t // spd
+
+        # Animations one-shot (attack, hurt, death)
+        if state in ('attack', 'hurt'):
+            idx = min(idx, n - 1)
+            if self._anim_t >= spd * n:
+                # Animation terminée → retour idle/walk
+                self._anim_state = 'idle'
+                self._anim_t     = 0
+                idx = 0
+        elif state == 'death':
+            idx = min(idx, n - 1)   # geler sur la dernière frame
+        else:
+            idx = idx % n           # boucle walk/idle
+
+        frame = sheet[idx]
+        if self.facing < 0:
+            frame = pygame.transform.flip(frame, True, False)
+        return frame
+
     def update(self, keys, platforms, particles, pull_x=None, pull_y=None, pull_force=0.0):
         self.frame += 1
+        self._anim_t += 1   # compteur d'animation indépendant
         if self.bow_cd > 0: self.bow_cd -= 1
         if self.dash_cooldown > 0: self.dash_cooldown -= 1
         if self.swap_cooldown > 0: self.swap_cooldown -= 1
@@ -890,94 +1002,122 @@ class Player:
         if was_on_ground and not self.on_ground and self.vy >= 0:
             self.coyote = COYOTE_FRAMES
 
-        if self.frame % 2 == 0:
-            self.cape_history.append((self.rect.centerx, self.rect.centery + 6))
-        self._update_cape()
-
-    def _update_cape(self):
-        if not self.cape_segments:
-            return
-        shoulder_x = self.rect.centerx - self.facing * 4
-        shoulder_y = self.rect.y + 18
-        self.cape_segments[0] = (shoulder_x, shoulder_y)
-        seg_len = 5.0
-        gravity_per_seg = 0.7
-        for i in range(1, len(self.cape_segments)):
-            px, py = self.cape_segments[i - 1]
-            cx, cy = self.cape_segments[i]
-            wind = math.sin(self.frame * 0.13 + i * 0.55) * 1.4
-            target_x = px - self.facing * 1.6 - self.vx * 0.4 + wind
-            target_y = py + gravity_per_seg
-            nx = cx + (target_x - cx) * 0.32
-            ny = cy + (target_y - cy) * 0.32
-            dx, dy = nx - px, ny - py
-            d = math.hypot(dx, dy) + 1e-6
-            if d > seg_len:
-                nx = px + dx / d * seg_len
-                ny = py + dy / d * seg_len
-            self.cape_segments[i] = (nx, ny)
+        # ── Mise à jour de l'état d'animation walk/idle ─────────────────
+        if self.hp <= 0:
+            if self._anim_state != 'death':
+                self._anim_state = 'death'
+                self._anim_t     = 0
+        elif self._anim_state not in ('attack', 'hurt', 'death'):
+            moving = abs(self.vx) > 1.0
+            new_state = 'walk' if moving else 'idle'
+            if self._anim_state != new_state:
+                self._anim_state = new_state
+                self._anim_t     = 0
 
     def draw(self, surf, cam):
-        if self.dash_trail:
-            for i, (tx, ty) in enumerate(self.dash_trail):
-                alpha = int(40 + 120 * (i / max(1, len(self.dash_trail))))
-                gh = pygame.Surface((self.rect.w, self.rect.h), pygame.SRCALPHA)
-                pygame.draw.rect(gh, (*pal_accent(self.dimension), alpha),
-                                 gh.get_rect(), border_radius=6)
-                surf.blit(gh, (tx - cam[0], ty - cam[1]))
+        # ── Helpers blit ─────────────────────────────────────────────────
+        # Ancrage : bord gauche = rect.left, bas pied = rect.bottom
+        def _blit_pos(rx, ry_bottom):
+            """Retourne (blit_x, blit_y) pour blitter le frame à la bonne position."""
+            return (rx      - cam[0] - SPR_BLIT_OX,
+                    ry_bottom - cam[1] - SPR_BLIT_FEET_OY)
 
+
+        # ── Clignotement invulnérabilité ────────────────────────────────
         if self.invuln > 0 and (self.invuln // 3) % 2 == 0:
             return
 
-        body = pal_body(self.dimension)
-        robe = pal_robe(self.dimension)
-        cape = pal_cape(self.dimension)
+        # ── Ombre au sol ─────────────────────────────────────────────────
+        # Uniquement quand on est posé sur une plateforme ET qu'on ne dash PAS.
+        if self.on_ground and self.dash_timer <= 0:
+            sh_cx = self.rect.centerx - cam[0]
+            sh_cy = self.rect.bottom  - cam[1]          # exactement au sol
+            sh_w  = int(PLAYER_W * 1.1)                 # légèrement plus large que le perso
+            sh_h  = max(4, sh_w // 7)                   # très plate — juste un filet
+            _sh   = pygame.Surface((sh_w, sh_h + 2), pygame.SRCALPHA)
+            pygame.draw.ellipse(_sh, (0, 0, 0, 160), (0, 1, sh_w, sh_h))
+            surf.blit(_sh, (sh_cx - sh_w // 2, sh_cy - sh_h // 2))
 
-        x = self.rect.x - cam[0]
-        y = self.rect.y - cam[1]
-
-        # CAPE chain physics
-        if len(self.cape_segments) >= 3:
-            n = len(self.cape_segments)
-            left_pts = []
-            right_pts = []
-            for i, (sx, sy) in enumerate(self.cape_segments):
-                width = max(2.0, 9.0 - i * 0.85)
-                if i < n - 1:
-                    nx2, ny2 = self.cape_segments[i + 1]
-                    dx, dy = nx2 - sx, ny2 - sy
+        # ── Sprite Frounette (scale ×3, ancrage pieds) ───────────────────
+        frame_surf = self._get_anim_frame()
+        bx, by = _blit_pos(self.rect.left, self.rect.bottom)
+        if frame_surf is not None:
+            if self._anim_state == 'attack':
+                # Rotation de l'animation d'attaque vers le curseur :
+                #   facing=1 (droite) → rot = -aim_angle
+                #   facing=-1 (gauche, frame déjà flippé) → rot = 180 - aim_angle
+                aim = self._aim_angle
+                if self.facing >= 0:
+                    rot_deg = -math.degrees(aim)
                 else:
-                    px2, py2 = self.cape_segments[i - 1]
-                    dx, dy = sx - px2, sy - py2
-                d = math.hypot(dx, dy) + 1e-6
-                perp_x = -dy / d * width
-                perp_y = dx / d * width
-                left_pts.append((sx + perp_x - cam[0], sy + perp_y - cam[1]))
-                right_pts.append((sx - perp_x - cam[0], sy - perp_y - cam[1]))
-            poly = left_pts + list(reversed(right_pts))
-            pygame.draw.polygon(surf, cape, poly)
-            pygame.draw.polygon(surf, pal_accent(self.dimension), poly, 1)
-            center_pts = [(sx - cam[0], sy - cam[1]) for sx, sy in self.cape_segments]
-            if len(center_pts) >= 2:
-                darker = tuple(max(0, c - 30) for c in cape)
-                pygame.draw.lines(surf, darker, False, center_pts, 1)
+                    rot_deg = 180.0 - math.degrees(aim)
+                rotated = pygame.transform.rotate(frame_surf, rot_deg)
+                # Centrer la frame pivotée sur le centre visuel du personnage
+                rcx = self.rect.centerx - cam[0]
+                rcy = self.rect.centery - cam[1]
+                rblit = rotated.get_rect(center=(rcx, rcy))
+                surf.blit(rotated, rblit)
+            else:
+                surf.blit(frame_surf, (bx, by))
+        else:
+            # Fallback procédural si assets absents
+            x = self.rect.x - cam[0]
+            y = self.rect.y - cam[1]
+            body = pal_body(self.dimension)
+            robe = pal_robe(self.dimension)
+            pygame.draw.rect(surf, robe,
+                             (x + 2, y + 18, self.rect.w - 4, self.rect.h - 18),
+                             border_radius=6)
+            pygame.draw.circle(surf, body, (x + self.rect.w // 2, y + 14), 12)
+            pygame.draw.arc(surf, robe,
+                            (x - 2, y - 2, self.rect.w + 4, 32),
+                            math.radians(20), math.radians(160), 6)
+            ex = x + self.rect.w // 2 + 3 * self.facing
+            pygame.draw.circle(surf, Pal.P_EYE, (ex, y + 14), 2)
 
-        # ROBE / CORPS
-        pygame.draw.rect(surf, robe, (x + 2, y + 18, self.rect.w - 4, self.rect.h - 18), border_radius=6)
-        pygame.draw.circle(surf, body, (x + self.rect.w // 2, y + 14), 12)
-        pygame.draw.arc(surf, robe, (x - 2, y - 2, self.rect.w + 4, 32),
-                        math.radians(20), math.radians(160), 6)
-        ex = x + self.rect.w // 2 + 3 * self.facing
-        pygame.draw.circle(surf, Pal.P_EYE, (ex, y + 14), 2)
+        # ── Indicateur de visée arc ─────────────────────────────────────
+        # Flèche rotative depuis le centre du joueur vers le curseur.
+        # Pleinement visible quand l'arc est prêt, fondu pendant le cooldown.
+        aim_alpha = int(255 * max(0.0, 1.0 - self.bow_cd / BOW_COOLDOWN))
+        if aim_alpha > 20:
+            ang  = self._aim_angle
+            # Centre de tir (légèrement devant le perso)
+            hcx  = self.rect.centerx - cam[0] + int(math.cos(ang) * 6)
+            hcy  = self.rect.centery - cam[1] + int(math.sin(ang) * 6)
+            # Longueur du trait de visée
+            L1, L2 = 10, 36          # début / fin du trait (en pixels écran)
+            x1 = hcx + int(math.cos(ang) * L1)
+            y1 = hcy + int(math.sin(ang) * L1)
+            x2 = hcx + int(math.cos(ang) * L2)
+            y2 = hcy + int(math.sin(ang) * L2)
+            # Glow extérieur
+            gs = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            for width, ga in ((7, int(aim_alpha * 0.18)), (4, int(aim_alpha * 0.35))):
+                pygame.draw.line(gs, (255, 220, 80, ga), (x1, y1), (x2, y2), width)
+            # Trait principal doré
+            pygame.draw.line(gs, (255, 230, 100, aim_alpha), (x1, y1), (x2, y2), 2)
+            # Pointe triangulaire
+            tip_a = ang
+            tw = 6
+            tp1 = (x2 + int(math.cos(tip_a) * tw),
+                   y2 + int(math.sin(tip_a) * tw))
+            tp2 = (x2 + int(math.cos(tip_a + 2.4) * tw // 2),
+                   y2 + int(math.sin(tip_a + 2.4) * tw // 2))
+            tp3 = (x2 + int(math.cos(tip_a - 2.4) * tw // 2),
+                   y2 + int(math.sin(tip_a - 2.4) * tw // 2))
+            pygame.draw.polygon(gs, (255, 255, 160, aim_alpha), [tp1, tp2, tp3])
+            surf.blit(gs, (0, 0))
 
-        # Aura swap
+        # ── Aura swap de dimension ───────────────────────────────────────
         if self.swap_invuln > 0:
             t = self.swap_invuln / SWAP_INVULN_FRAMES
             r = int(28 + (1 - t) * 30)
             a = int(120 * t)
             s = pygame.Surface((r * 2 + 4, r * 2 + 4), pygame.SRCALPHA)
-            pygame.draw.circle(s, (*pal_accent(self.dimension), a), (r + 2, r + 2), r, 3)
-            surf.blit(s, (x + self.rect.w // 2 - r - 2, y + self.rect.h // 2 - r - 2))
+            pygame.draw.circle(s, (*pal_accent(self.dimension), a),
+                               (r + 2, r + 2), r, 3)
+            surf.blit(s, (self.rect.centerx - cam[0] - r - 2,
+                          self.rect.centery  - cam[1] - r - 2))
 
 
 # ---------------------------------------------------------------------------
@@ -1150,7 +1290,7 @@ class MoonBoss:
         try:
             self._snd_laser = pygame.mixer.Sound(
                 os.path.join(_base_dir, "assets", "sounds", "laser.mp3"))
-            self._snd_laser.set_volume(0.50)
+            self._snd_laser.set_volume(0.15)
         except Exception:
             self._snd_laser = None
 
@@ -1158,9 +1298,33 @@ class MoonBoss:
         try:
             self._snd_last_resort = pygame.mixer.Sound(
                 os.path.join(_base_dir, "assets", "sounds", "last_resort.mp3"))
-            self._snd_last_resort.set_volume(0.80)
+            self._snd_last_resort.set_volume(0.15)
         except Exception:
             self._snd_last_resort = None
+
+        # Son : l'épée coupe le boss (final blow t=331)
+        try:
+            self._snd_sword_cut = pygame.mixer.Sound(
+                os.path.join(_base_dir, "assets", "sounds", "sword_cut.mp3"))
+            self._snd_sword_cut.set_volume(0.18)
+        except Exception:
+            self._snd_sword_cut = None
+
+        # Son : explosion du boss (final blow t=331)
+        try:
+            self._snd_boss_explosion = pygame.mixer.Sound(
+                os.path.join(_base_dir, "assets", "sounds", "boss_explosion.mp3"))
+            self._snd_boss_explosion.set_volume(0.18)
+        except Exception:
+            self._snd_boss_explosion = None
+
+        # Son : boss reçoit des dégâts
+        try:
+            self._snd_boss_hit = pygame.mixer.Sound(
+                os.path.join(_base_dir, "assets", "sounds", "boss_hit.mp3"))
+            self._snd_boss_hit.set_volume(0.18)
+        except Exception:
+            self._snd_boss_hit = None
 
         # Compteurs de pattern rotatif par phase
         self.p1_step = 0
@@ -1842,7 +2006,19 @@ class MoonBoss:
         return True
 
     def _update_final_blow(self, beams, particles, player):
-        """Cinématique fin — épée divine fend le boss en deux : 300 frames."""
+        """Cinématique fin — épée divine fend le boss en deux : 590 frames (~10 sec).
+
+        Timeline :
+          A   1- 60  : boss tremble, feu intense
+          B  61-110  : silence, le monde se fige
+          C 111-165  : épée matérialise depuis le ciel
+          D 166-200  : épée accélère
+         D2 201-210  : fissure, épée touche
+        WAT 211-330  : épée figée dans le boss, "?" sur l'expression (2 sec)
+          E 331-350  : IMPACT — boss se brise
+          F 351-590  : moitiés tombent, débris (4 sec)
+        FIN  >590   : fin
+        """
         self.final_blow_t += 1
         t = self.final_blow_t
 
@@ -1878,7 +2054,6 @@ class MoonBoss:
             self.y = self._lr_oy + random.uniform(-1.5, 1.5)
             if t == 61:
                 self.game.add_shake(8, 16)
-            # Quelques particules dorées qui tombent doucement
             if t % 15 == 0:
                 for _ in range(4):
                     burst(particles,
@@ -1898,9 +2073,7 @@ class MoonBoss:
             self.game.sword_visible = True
             boss_sy = int(self._lr_oy - self.game.cam[1])
             self.game.sword_x = int(self._lr_ox - self.game.cam[0])
-            # Pointe part de y=-180, descend jusqu'à 120px au-dessus du boss
             self.game.sword_y = int(-180 + prog_c * (boss_sy - 120 + 180))
-            # Particules dorées autour du pilier de lumière
             if t % 7 == 0:
                 for _ in range(5):
                     ox = random.uniform(-28, 28)
@@ -1912,7 +2085,6 @@ class MoonBoss:
         elif t <= 200:
             self.x = self._lr_ox
             self.y = self._lr_oy
-            # Accélération quadratique
             prog_d = ((t - 166) / 34.0) ** 2.0
             boss_sy = int(self._lr_oy - self.game.cam[1])
             self.game.sword_x = int(self._lr_ox - self.game.cam[0])
@@ -1936,20 +2108,42 @@ class MoonBoss:
                 burst(particles, self._lr_ox, self._lr_oy,
                       6, (255, 255, 200), 3.0, 12, 0.0, 3)
 
-        # ── Phase E (211-230) : IMPACT — le boss se brise ────────────────────
-        elif t <= 230:
+        # ── Phase WAIT (211-330) : épée figée, boss confus — "?" apparaît ────
+        elif t <= 330:
             self.x = self._lr_ox
             self.y = self._lr_oy
             if t == 211:
+                self.game.boss_crack_active = False
+                self.game.boss_qmark_t = 1
+            # Épée légèrement vibrante, plantée dans le boss
+            boss_sy = int(self._lr_oy - self.game.cam[1])
+            self.game.sword_visible = True
+            jitter = math.sin(t * 0.55) * 1.8
+            self.game.sword_x = int(self._lr_ox - self.game.cam[0] + jitter)
+            self.game.sword_y = int(boss_sy + 8)
+            # Timer pour le point d'interrogation
+            self.game.boss_qmark_t += 1
+            # Quelques étincelles dorées qui tombent de la garde
+            if t % 14 == 0:
+                burst(particles, self._lr_ox, self._lr_oy - 50,
+                      4, (255, 230, 80), 2.0, 55, 0.12, 2)
+
+        # ── Phase E (331-350) : IMPACT — le boss se brise ────────────────────
+        elif t <= 350:
+            self.x = self._lr_ox
+            self.y = self._lr_oy
+            if t == 331:
                 self.game.sword_visible = False
                 self.game.boss_crack_active = False
+                self.game.boss_qmark_t = 0
                 self.game.boss_split_t = 1
                 self.game.boss_split_cx = self._lr_ox
                 self.game.boss_split_cy = self._lr_oy
                 self.game.add_shake(90, 110)
                 self.game.start_slowmo(65)
                 self.game.announce_phase("CE N'EST PAS LE MOMENT")
-                # Cône gauche — fragments qui s'éparpillent vers la gauche
+                if self._snd_sword_cut: self._snd_sword_cut.play()
+                if self._snd_boss_explosion: self._snd_boss_explosion.play()
                 for _ in range(220):
                     angle = random.uniform(math.pi * 0.55, math.pi * 0.95)
                     spd   = random.uniform(8.0, 30.0)
@@ -1959,7 +2153,6 @@ class MoonBoss:
                     particles.append(Particle(self.x, self.y, vx, vy,
                                               random.randint(55, 130), col,
                                               random.randint(4, 9), 0.06))
-                # Cône droit — symétrique
                 for _ in range(220):
                     angle = random.uniform(math.pi * 0.05, math.pi * 0.45)
                     spd   = random.uniform(8.0, 30.0)
@@ -1969,29 +2162,29 @@ class MoonBoss:
                     particles.append(Particle(self.x, self.y, vx, vy,
                                               random.randint(55, 130), col,
                                               random.randint(4, 9), 0.06))
-                # Explosion centrale blanche
                 burst(particles, self.x, self.y, 160, (255, 255, 255), 34.0, 55, 0.0, 9)
                 burst(particles, self.x, self.y, 90, (200, 230, 255), 24.0, 42, 0.0, 7)
             if self.game.boss_split_t > 0:
                 self.game.boss_split_t += 1
 
-        # ── Phase F (231-300) : les deux moitiés tombent, débris dorés ───────
-        elif t <= 300:
+        # ── Phase F (351-590) : moitiés tombent, débris dorés (4 sec) ────────
+        elif t <= 590:
             self.x = self._lr_ox
             self.y = self._lr_oy
             if self.game.boss_split_t > 0:
                 self.game.boss_split_t += 1
-            if t < 278 and t % 9 == 0:
+            if t < 540 and t % 9 == 0:
                 burst(particles,
                       self.x + random.uniform(-75, 75),
                       self.y + random.uniform(-55, 55),
                       22, (255, 215, 80), 7.5, 52, 0.08, 4)
-                self.game.add_shake(max(3, 15 - (t - 231) // 6), 5)
+                self.game.add_shake(max(3, 15 - (t - 351) // 6), 5)
 
-        # ── FIN (>300) ────────────────────────────────────────────────────────
+        # ── FIN (>590) ────────────────────────────────────────────────────────
         else:
             self.game.sword_visible = False
             self.game.boss_crack_active = False
+            self.game.boss_qmark_t = 0
             self.game.boss_split_t = 0
             self.final_blow_active = False
             self.dead = True
@@ -2258,11 +2451,12 @@ class MoonBoss:
             if self.hp == 0 and self.phase == 5:
                 self.dead = True
         self.hit_flash = 8
+        if self._snd_boss_hit: self._snd_boss_hit.play()
         return actual
 
     def draw(self, surf, cam, current_dim):
-        # Invisible dès l'explosion de la cinématique finale (phase E, t=211)
-        if self.final_blow_active and self.final_blow_t >= 211:
+        # Invisible dès l'explosion de la cinématique finale (phase E, t=331)
+        if self.final_blow_active and self.final_blow_t >= 331:
             return
         if self.dead:
             return
@@ -2576,12 +2770,7 @@ class Game:
     def __init__(self):
         os.environ.setdefault("SDL_VIDEO_CENTERED", "1")
         self.fullscreen = False
-        # SCALED demande un renderer GPU. Si dispo on l'utilise (rendering pixel-perfect),
-        # sinon fallback sur le mode classique.
-        try:
-            self.screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.SCALED)
-        except pygame.error:
-            self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         pygame.display.set_caption("Dreamspawn — Prototype v3")
         self.clock = pygame.time.Clock()
 
@@ -2617,27 +2806,19 @@ class Game:
                 return None
 
         # Boss HP bar  (Health_03 — 128×32 src, fill x=24..107 y=14..17)
-        _BS = 2                                      # boss scale ×2
+        # Scale uniforme ×3 → 384×96 — proportions respectées, pas d'étirement
+        _BS = 3
         self._hp_frame    = _load_ui("hp_bar_frame.png", _BS)
         self._hp_fill     = _load_ui("hp_bar_fill.png",  _BS)
-        self._hp_fw       = 128 * _BS                # 256
-        self._hp_fh       = 32  * _BS                # 64
-        self._hp_fill_x0  = 24  * _BS                # 48
-        self._hp_fill_w   = 84  * _BS                # 168
-        self._hp_fill_y0  = 14  * _BS                # 28  (y dans surf scalée)
+        self._hp_fw       = 128 * _BS               # 384
+        self._hp_fh       = 32  * _BS               # 96
+        self._hp_fill_x0  = 24  * _BS               # 72
+        self._hp_fill_w   = 84  * _BS               # 252
+        self._hp_fill_y0  = 14  * _BS               # 42  (y dans surf scalée)
 
-        # Hero HP bar  (Health_01 — 128×32 src, fill x=32..121 y=10..13)
-        _HS = 3                                      # hero scale ×3
-        self._hero_frame   = _load_ui("hp_hero_frame.png", _HS)
-        self._hero_fill    = _load_ui("hp_hero_fill.png",  _HS)
-        self._hero_fw      = 128 * _HS               # 384
-        self._hero_fh      = 32  * _HS               # 96
-        self._hero_fill_x0 = 32  * _HS               # 96
-        self._hero_fill_w  = 90  * _HS               # 270
-        self._hero_fill_y0 = 10  * _HS               # 30  (y dans surf scalée)
-        # Zone coeur (x=0..31 src → x=0..93 scalé, y=0..29 src → y=0..87 scalé)
-        self._hero_heart_w = 32  * _HS               # 96  largeur zone coeur
-        self._hero_heart_h = 30  * _HS               # 90  hauteur zone coeur
+        # Hero HP bar — assets plus utilisés (barre procédurale avec cadran doré)
+        self._hero_frame = None
+        self._hero_fill  = None
 
         # Background images avec parallax
         _base_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -2694,10 +2875,11 @@ class Game:
         self.boss_split_t = 0
         self.boss_split_cx = 0
         self.boss_split_cy = 0
+        self.boss_qmark_t = 0       # >0 pendant la pause épée (phase WAIT)
         self.settings_open = False
         self._settings_path = os.path.join(os.path.expanduser("~"), ".dreamspawn_settings.json")
-        self.music_vol = 0.30
-        self.sfx_vol   = 0.55
+        self.music_vol = 0.03
+        self.sfx_vol   = 0.15
         self.controls_scroll = 0
         self._load_settings()
 
@@ -2705,8 +2887,14 @@ class Game:
         try:
             with open(self._settings_path, 'r') as f:
                 data = json.load(f)
-            self.music_vol = float(data.get("music_vol", 0.30))
-            self.sfx_vol   = float(data.get("sfx_vol",   0.55))
+            # music_vol ignoré volontairement : volume forcé à 5% depuis le code
+            self.sfx_vol = float(data.get("sfx_vol", 0.15))
+        except Exception:
+            pass
+        # Volume musique toujours forcé à 5% indépendamment des sauvegardes
+        self.music_vol = 0.03
+        try:
+            pygame.mixer.music.set_volume(0.03)
         except Exception:
             pass
 
@@ -2783,16 +2971,8 @@ class Game:
 
     def toggle_fullscreen(self):
         self.fullscreen = not self.fullscreen
-        try:
-            if self.fullscreen:
-                self.screen = pygame.display.set_mode((WIDTH, HEIGHT),
-                                                      pygame.FULLSCREEN | pygame.SCALED)
-            else:
-                self.screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.SCALED)
-        except pygame.error:
-            # Fallback sans SCALED si l'environnement ne le supporte pas
-            flags = pygame.FULLSCREEN if self.fullscreen else 0
-            self.screen = pygame.display.set_mode((WIDTH, HEIGHT), flags)
+        flags = pygame.FULLSCREEN if self.fullscreen else 0
+        self.screen = pygame.display.set_mode((WIDTH, HEIGHT), flags)
 
     def reset_to_title(self):
         self.state = STATE_TITLE
@@ -2820,6 +3000,7 @@ class Game:
         self.sword_visible = False
         self.boss_crack_active = False
         self.boss_split_t = 0
+        self.boss_qmark_t = 0
         try:
             pygame.mixer.music.fadeout(1500)
         except Exception:
@@ -2860,6 +3041,7 @@ class Game:
         self.sword_visible = False
         self.boss_crack_active = False
         self.boss_split_t = 0
+        self.boss_qmark_t = 0
         self._play_music("boss_moon.mp3", fadein_ms=2000)
 
     def add_shake(self, strength, frames=10):
@@ -2983,10 +3165,22 @@ class Game:
                 self.draw_title()
             elif self.state == STATE_HUB:
                 if do_update: self.update_hub()
+                # Mise à jour de l'angle de visée depuis la souris
+                if self.player:
+                    _mx, _my = pygame.mouse.get_pos()
+                    _scx = self.player.rect.centerx - self.cam[0]
+                    _scy = self.player.rect.centery - self.cam[1]
+                    self.player._aim_angle = math.atan2(_my - _scy, _mx - _scx)
                 self.draw_world(in_arena=False)
                 self.draw_hub_overlay()
             elif self.state == STATE_MOON:
                 if do_update: self.update_moon()
+                # Mise à jour de l'angle de visée depuis la souris
+                if self.player:
+                    _mx, _my = pygame.mouse.get_pos()
+                    _scx = self.player.rect.centerx - self.cam[0]
+                    _scy = self.player.rect.centery - self.cam[1]
+                    self.player._aim_angle = math.atan2(_my - _scy, _mx - _scx)
                 self.draw_world(in_arena=True)
                 if self.final_blow_hub_t > 0:
                     self._draw_victory_overlay()   # fond progressif + texte par-dessus
@@ -3348,10 +3542,16 @@ class Game:
         if in_arena and self.boss and self.boss.state == "fighting" and self.boss.phase == 3 and dim == DIM_REAL:
             overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
             overlay.fill((0, 0, 0, 245))   # quasi-noir en réalité seulement (rêve = visible)
-            for (sx, sy, rd) in (
-                (self.player.rect.centerx - self.cam[0], self.player.rect.centery - self.cam[1], 110),
-                (int(self.boss.x - self.cam[0]), int(self.boss.y - self.cam[1]), 140)):
-                pygame.draw.circle(overlay, (0, 0, 0, 0), (int(sx), int(sy)), int(rd))
+            # Cercle autour du boss toujours visible
+            bx_s = int(self.boss.x - self.cam[0])
+            by_s = int(self.boss.y - self.cam[1])
+            pygame.draw.circle(overlay, (0, 0, 0, 0), (bx_s, by_s), 140)
+            # Cercle autour du joueur : seulement quand au sol ET pas en dash
+            player_grounded = self.player.on_ground and self.player.dash_timer <= 0
+            if player_grounded:
+                sx = self.player.rect.centerx - self.cam[0]
+                sy = self.player.rect.centery  - self.cam[1]
+                pygame.draw.circle(overlay, (0, 0, 0, 0), (int(sx), int(sy)), 110)
             self.screen.blit(overlay, (0, 0))
 
         if self.player: self.player.draw(self.screen, self.cam)
@@ -3439,27 +3639,47 @@ class Game:
                 pulse = max(0, int(25 * math.sin(t * 0.22)))
                 s.fill((6, 0, 0, min(160, int(80 + 80 * prog_b))))
                 pygame.draw.rect(s, (180, 10, 10, 60 + pulse), (0, 0, WIDTH, HEIGHT), 10)
-            # Phase C + D : fond sombre, la main divine est dessinée séparément
-            elif t <= 210:
+            # Phase C + D + D2 + WAIT : fond sombre
+            elif t <= 330:
                 s.fill((0, 0, 0, 170))
             # Phase E : flash blanc à l'impact
-            elif t <= 230:
-                fa = max(0, min(255, int(255 * (1.0 - (t - 211) / 19.0))))
+            elif t <= 350:
+                fa = max(0, min(255, int(255 * (1.0 - (t - 331) / 19.0))))
                 s.fill((255, 250, 220, fa))
             # Phase F : fondu au noir progressif
-            elif t <= 300:
-                fa = min(255, int(255 * (t - 231) / 69.0))
+            elif t <= 590:
+                fa = min(255, int(255 * (t - 351) / 239.0))
                 s.fill((0, 0, 0, fa))
             self.screen.blit(s, (0, 0))
+
             # Épée divine
             if self.sword_visible and t >= 111:
                 if t <= 165:
                     prog = (t - 111) / 54.0
-                elif t <= 210:
+                elif t <= 330:
                     prog = 1.0
                 else:
                     prog = 0.0
                 self._draw_divine_sword(self.sword_x, self.sword_y, prog)
+
+            # ── Point d'interrogation sur le boss (phase WAIT 211-330) ──────
+            if self.boss_qmark_t > 0:
+                qm_t = self.boss_qmark_t
+                # Apparition progressive (fondu sur 30 frames)
+                qm_alpha = min(255, int(255 * qm_t / 30))
+                # Légère oscillation verticale
+                boss_sx = int(self.boss.x - self.cam[0])
+                boss_sy = int(self.boss.y - self.cam[1])
+                qm_y = boss_sy - 90 - int(8 * math.sin(qm_t * 0.07))
+                # Rendu du "?" avec la police
+                qm_surf = self.font_big.render("?", True, (255, 230, 60))
+                qm_surf.set_alpha(qm_alpha)
+                # Contour sombre pour lisibilité
+                qm_shadow = self.font_big.render("?", True, (20, 10, 0))
+                qm_shadow.set_alpha(qm_alpha)
+                self.screen.blit(qm_shadow, (boss_sx - qm_surf.get_width() // 2 + 2,
+                                             qm_y + 2))
+                self.screen.blit(qm_surf, (boss_sx - qm_surf.get_width() // 2, qm_y))
 
         # (overlay victoire géré dans la boucle principale, pas ici)
 
@@ -3538,61 +3758,115 @@ class Game:
             self.screen.blit(w, w.get_rect(midbottom=(WIDTH // 2, HEIGHT - 6)))
 
     def draw_hud(self):
-        # ── Barre HP héros ────────────────────────────────────────────────────
-        # fill zone src : x=32..121 (90px), y=10..13 (4px)  → ×3 : x=96, w=270, y=30, h=12
-        hfx     = 8
-        hfy     = 4
-        frac    = max(0.0, self.player.hp / self.player.max_hp)
-        fill_sx = hfx + self._hero_fill_x0       # screen x début du fill
-        fill_sy = hfy + self._hero_fill_y0        # screen y du fill
-        fill_h  = 4 * 3                           # 4 lignes × scale3 = 12px
-        fill_sw = max(0, int(self._hero_fill_w * frac))
-        # Couleur rouge naturelle du fill asset
-        RED_FILL = (205, 48, 15)
+        # ── Palette dorée partagée ────────────────────────────────────────────
+        GOLD        = (215, 160,  40)
+        GOLD_BRIGHT = (255, 215,  70)
+        GOLD_DARK   = (120,  85,  15)
+        GOLD_INNER  = (170, 115,  25)
 
-        # 0. Rouge derrière le cadre (coeur + barre) pour que l'intérieur
-        #    transparent du coeur devienne rouge
-        if frac > 0:
-            # Remplir toute la zone coeur en rouge (l'intérieur transparent laisse passer)
-            pygame.draw.rect(self.screen, RED_FILL,
-                             (hfx, hfy, self._hero_heart_w, self._hero_heart_h))
-            # Remplir la zone barre proportionnellement
-            pygame.draw.rect(self.screen, RED_FILL,
-                             (fill_sx, fill_sy, fill_sw, fill_h))
+        # ── Coeur pixel-art (PX=3 → 24×18 px, bien visible) ─────────────────
+        PX   = 3
+        heart_pattern = [
+            "01100110",
+            "11111111",
+            "11111111",
+            "01111110",
+            "00111100",
+            "00011000",
+        ]
+        H_W = 8 * PX   # 24
+        H_H = 6 * PX   # 18
 
-        # 1. Frame PAR-DESSUS (l'intérieur du coeur est transparent → le rouge passe)
-        if self._hero_frame:
-            self.screen.blit(self._hero_frame, (hfx, hfy))
-        else:
-            pygame.draw.rect(self.screen, Pal.HP_BG,
-                             (fill_sx, fill_sy, self._hero_fill_w, fill_h))
-            pygame.draw.rect(self.screen, Pal.HP_FILL,
-                             (fill_sx, fill_sy, fill_sw, fill_h))
+        # Position : calé sur le bord gauche de l'écran
+        hx0  = 8
+        hy0  = 8
+        frac = max(0.0, self.player.hp / self.player.max_hp)
+        heart_col = (220, 50, 15) if frac > 0.35 else \
+                    (255, 110,  0) if frac > 0.15 else (200, 20, 20)
+        if frac <= 0:
+            heart_col = (50, 10, 10)
+        light_col = tuple(min(255, c + 80) for c in heart_col)
 
-        # 2. Fill asset PAR-DESSUS le frame pour les détails (reflet/ombre)
-        if fill_sw > 0 and self._hero_fill:
-            self.screen.blit(self._hero_fill,
-                             (fill_sx, fill_sy),
-                             area=pygame.Rect(self._hero_fill_x0,
-                                              self._hero_fill_y0,
-                                              fill_sw, fill_h))
+        # Ombre du cadran coeur
+        pygame.draw.rect(self.screen, (8, 4, 0),
+                         (hx0 - 2, hy0 - 2, H_W + 8, H_H + 8), border_radius=5)
+        # Fond intérieur sombre
+        pygame.draw.rect(self.screen, (30, 5, 5),
+                         (hx0, hy0, H_W, H_H))
+        # Pixels du coeur
+        for ri, row in enumerate(heart_pattern):
+            for ci, px_val in enumerate(row):
+                if px_val == '1':
+                    c_px = light_col if ri == 0 else heart_col
+                    pygame.draw.rect(self.screen, c_px,
+                                     (hx0 + ci * PX, hy0 + ri * PX, PX, PX))
+        # Cadran doré autour du coeur
+        pygame.draw.rect(self.screen, GOLD_DARK,
+                         (hx0 - 3, hy0 - 3, H_W + 6, H_H + 6), 3, border_radius=5)
+        pygame.draw.rect(self.screen, GOLD,
+                         (hx0 - 2, hy0 - 2, H_W + 4, H_H + 4), 2, border_radius=4)
+        pygame.draw.line(self.screen, GOLD_BRIGHT,
+                         (hx0, hy0 - 2), (hx0 + H_W - 1, hy0 - 2))
+        # Clous aux coins
+        for cx2, cy2 in [(hx0-3, hy0-3), (hx0+H_W-1, hy0-3),
+                         (hx0-3, hy0+H_H-1), (hx0+H_W-1, hy0+H_H-1)]:
+            pygame.draw.rect(self.screen, GOLD_BRIGHT, (cx2, cy2, 4, 4))
+            pygame.draw.rect(self.screen, GOLD_INNER,  (cx2+1, cy2+1, 2, 2))
+
+        # ── Barre HP (démarre juste après le coeur) ───────────────────────────
+        BAR_X = hx0 + H_W + 10   # 8 + 24 + 10 = 42 → toujours à l'écran
+        BAR_Y = hy0 + (H_H - 14) // 2
+        BAR_W = 180
+        BAR_H = 14
+        fill_sw = int(BAR_W * frac)
+
+        # Ombre portée
+        pygame.draw.rect(self.screen, (10, 5, 0),
+                         (BAR_X + 2, BAR_Y + 2, BAR_W + 6, BAR_H + 6), border_radius=3)
+        # Fond sombre
+        pygame.draw.rect(self.screen, (38, 10, 10),
+                         (BAR_X, BAR_Y, BAR_W, BAR_H), border_radius=3)
+        # Fill
+        if fill_sw > 0:
+            pygame.draw.rect(self.screen, heart_col,
+                             (BAR_X + 1, BAR_Y + 1, max(1, fill_sw - 1), BAR_H - 2),
+                             border_radius=2)
+            pygame.draw.rect(self.screen,
+                             tuple(min(255, c + 60) for c in heart_col),
+                             (BAR_X + 1, BAR_Y + 1, max(1, fill_sw - 1), 3),
+                             border_radius=2)
+        # Cadran doré barre
+        pygame.draw.rect(self.screen, GOLD_DARK,
+                         (BAR_X - 3, BAR_Y - 3, BAR_W + 6, BAR_H + 6), 3, border_radius=4)
+        pygame.draw.rect(self.screen, GOLD,
+                         (BAR_X - 2, BAR_Y - 2, BAR_W + 4, BAR_H + 4), 2, border_radius=4)
+        pygame.draw.line(self.screen, GOLD_BRIGHT,
+                         (BAR_X, BAR_Y - 2), (BAR_X + BAR_W - 1, BAR_Y - 2))
+        for cx2, cy2 in [(BAR_X - 3, BAR_Y - 3),
+                         (BAR_X + BAR_W - 1, BAR_Y - 3),
+                         (BAR_X - 3, BAR_Y + BAR_H - 1),
+                         (BAR_X + BAR_W - 1, BAR_Y + BAR_H - 1)]:
+            pygame.draw.rect(self.screen, GOLD_BRIGHT, (cx2, cy2, 4, 4))
+            pygame.draw.rect(self.screen, GOLD_INNER,  (cx2 + 1, cy2 + 1, 2, 2))
 
         # Bouclier
         if self.player.shield > 0:
-            sh_x = fill_sx
-            sh_w = self._hero_fill_w
-            sy2  = fill_sy + fill_h + 2
+            sy2 = BAR_Y + BAR_H + 6
             shield_frac = min(1.0, self.player.shield / 10)
-            pygame.draw.rect(self.screen, (20, 60, 30),    (sh_x, sy2, sh_w, 6), border_radius=3)
-            pygame.draw.rect(self.screen, (60, 220, 100),  (sh_x, sy2, int(sh_w * shield_frac), 6), border_radius=3)
-            pygame.draw.rect(self.screen, (120, 255, 150), (sh_x, sy2, sh_w, 6), 1, border_radius=3)
-            sh_lbl = self.font_sm.render(f"BOUCLIER  {self.player.shield}", True, (120, 255, 150))
-            self.screen.blit(sh_lbl, (sh_x + 4, sy2))
+            pygame.draw.rect(self.screen, (20, 60, 30),
+                             (BAR_X, sy2, BAR_W, 6), border_radius=3)
+            pygame.draw.rect(self.screen, (60, 220, 100),
+                             (BAR_X, sy2, int(BAR_W * shield_frac), 6), border_radius=3)
+            pygame.draw.rect(self.screen, (120, 255, 150),
+                             (BAR_X, sy2, BAR_W, 6), 1, border_radius=3)
+            sh_lbl = self.font_sm.render(f"BOUCLIER  {self.player.shield}",
+                                         True, (120, 255, 150))
+            self.screen.blit(sh_lbl, (BAR_X + 4, sy2))
 
         lbl = "REALITE" if self.player.dimension == DIM_REAL else "REVE BRISE"
         col = pal_accent(self.player.dimension)
         d_surf = self.font_sm.render(lbl, True, col)
-        self.screen.blit(d_surf, (fill_sx + 4, fill_sy + fill_h + 2))
+        self.screen.blit(d_surf, (BAR_X, BAR_Y + BAR_H + 5))
 
         cd_w = 220
         cd_x = WIDTH // 2 - cd_w // 2
@@ -3628,17 +3902,23 @@ class Game:
     def draw_boss_ui(self):
         if not self.boss: return
 
-        # ── Position ──────────────────────────────────────────────────────────
-        # fill zone src : x=24..107 (84px), y=14..17 (4px)  → ×2 : x=48, w=168, y=28, h=8
-        fx      = WIDTH // 2 - self._hp_fw // 2
-        fy      = 36 - self._hp_fill_y0          # fill_y0=28 → fy=8
-        frac    = self.boss.display_bar_fraction()
-        fill_h  = 8                               # 4 lignes × scale2
-        fill_sx = fx + self._hp_fill_x0           # screen x du fill
-        fill_sy = fy + self._hp_fill_y0           # screen y du fill (=36)
-        fill_sw = max(0, int(self._hp_fill_w * frac))
+        # ══════════════════════════════════════════════════════════════════════
+        # BARRE DE VIE DU BOSS — procédurale, longue et fine
+        # Dimensions : 820px × 14px, centrée, à y=30 du haut de l'écran
+        # ══════════════════════════════════════════════════════════════════════
+        BAR_W    = 820    # largeur totale (cadran inclus)
+        BAR_H    = 18     # hauteur totale
+        BAR_Y    = 46     # position verticale du haut de la barre
+        BAR_X    = WIDTH // 2 - BAR_W // 2
+        PAD      = 3      # espace intérieur entre bordure et fill
+        FILL_W   = BAR_W - PAD * 2
+        FILL_H   = BAR_H - PAD * 2
+        FILL_X   = BAR_X + PAD
+        FILL_Y   = BAR_Y + PAD
 
-        # Couleur directe selon la phase (pas de BLEND — draw rect propre)
+        frac = self.boss.display_bar_fraction()
+
+        # ── Couleur du fill selon la phase ───────────────────────────────────
         if self.boss.last_resort_active:
             pulse     = abs(math.sin(self.frame * 0.18))
             phase_col = (int(220 + 35 * pulse), int(20 * (1 - pulse)), 15)
@@ -3646,33 +3926,40 @@ class Game:
             phase_col = (210, 20, 55) if self.boss.final_form else (175, 45, 95)
         elif self.boss.phase == 4: phase_col = (255, 100, 180)
         elif self.boss.phase == 3: phase_col = (110, 110, 205)
-        else:                       phase_col = None   # asset naturel
+        else:                       phase_col = (210, 35, 18)
 
-        # 1. Frame en premier
-        if self._hp_frame:
-            self.screen.blit(self._hp_frame, (fx, fy))
-        else:
-            pygame.draw.rect(self.screen, (30, 18, 8),
-                             (fill_sx, fill_sy, self._hp_fill_w, fill_h))
+        # ── 1. Fond sombre de la barre ────────────────────────────────────────
+        pygame.draw.rect(self.screen, (8, 4, 14),
+                         (BAR_X, BAR_Y, BAR_W, BAR_H), border_radius=3)
 
-        # 2. Fill PAR-DESSUS le frame
+        # ── 2. Fill (centré → vide depuis les deux extrémités) ────────────────
+        fill_sw = max(0, int(FILL_W * frac))
         if fill_sw > 0:
-            if phase_col is None and self._hp_fill:
-                # Asset rouge naturel
-                self.screen.blit(self._hp_fill,
-                                 (fill_sx, fill_sy),
-                                 area=pygame.Rect(self._hp_fill_x0,
-                                                  self._hp_fill_y0,
-                                                  fill_sw, fill_h))
-            else:
-                # Couleur phase directe
-                col = phase_col if phase_col else (205, 48, 15)
-                pygame.draw.rect(self.screen, col,
-                                 (fill_sx, fill_sy, fill_sw, fill_h))
+            _side_empty = (FILL_W - fill_sw) // 2
+            fx = FILL_X + _side_empty
+            # Remplissage principal
+            pygame.draw.rect(self.screen, phase_col,
+                             (fx, FILL_Y, fill_sw, FILL_H), border_radius=2)
+            # Reflet lumineux (ligne fine en haut du fill)
+            hi_col = tuple(min(255, c + 65) for c in phase_col)
+            pygame.draw.rect(self.screen, hi_col,
+                             (fx, FILL_Y, fill_sw, max(1, FILL_H // 3)), border_radius=1)
+
+        # ── 3. Cadran doré par-dessus (bordure + coins) ───────────────────────
+        # Bordure principale
+        pygame.draw.rect(self.screen, (180, 145, 40),
+                         (BAR_X, BAR_Y, BAR_W, BAR_H), 1, border_radius=3)
+        # Ligne intérieure plus sombre
+        pygame.draw.rect(self.screen, (100, 80, 20),
+                         (BAR_X + 1, BAR_Y + 1, BAR_W - 2, BAR_H - 2), 1, border_radius=2)
+        # Petits boulons aux 4 coins
+        for bx, by in ((BAR_X + 3, BAR_Y + 3), (BAR_X + BAR_W - 5, BAR_Y + 3),
+                       (BAR_X + 3, BAR_Y + BAR_H - 5), (BAR_X + BAR_W - 5, BAR_Y + BAR_H - 5)):
+            pygame.draw.rect(self.screen, (210, 175, 55), (bx, by, 2, 2))
 
         # ── Textes ────────────────────────────────────────────────────────────
-        bar_screen_y = fill_sy
-        below_y = bar_screen_y + fill_h + 2
+        bar_screen_y = BAR_Y
+        below_y = BAR_Y + BAR_H + 3
 
         name = self.font_sm.render(f"LA LUNE  —  Phase {self.boss.phase}", True, Pal.UI)
         self.screen.blit(name, name.get_rect(midbottom=(WIDTH // 2, bar_screen_y - 2)))
