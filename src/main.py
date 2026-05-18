@@ -1486,8 +1486,8 @@ class MoonBoss:
         step = (base_right - base_left) / 5
         sequence = [0, 3, 1, 4, 2, 5]
         positions = [(base_left + i * step, idx) for idx, i in enumerate(sequence)]
-        cascade_delay = 20
-        tg_base = 45
+        cascade_delay = 50
+        tg_base = 60
         for tx, idx in positions:
             delay = 20 + idx * cascade_delay
             def make_fire(tx=tx):
@@ -2876,6 +2876,7 @@ class Game:
         self.boss_split_cx = 0
         self.boss_split_cy = 0
         self.boss_qmark_t = 0       # >0 pendant la pause épée (phase WAIT)
+        self.dream_exit_flash = 0
         self.settings_open = False
         self._settings_path = os.path.join(os.path.expanduser("~"), ".dreamspawn_settings.json")
         self.music_vol = 0.03
@@ -3042,6 +3043,7 @@ class Game:
         self.boss_crack_active = False
         self.boss_split_t = 0
         self.boss_qmark_t = 0
+        self.dream_exit_flash = 0
         self._play_music("boss_moon.mp3", fadein_ms=2000)
 
     def add_shake(self, strength, frames=10):
@@ -3243,6 +3245,7 @@ class Game:
             burst(self.particles, cx, cy, 60, Pal.D_ACCENT, 10.0, 50, 0.0, 5)
             burst(self.particles, cx, cy, 30, (255, 255, 255), 7.0, 35, 0.0, 4)
             self.add_shake(18, 25)
+            self.dream_exit_flash = 12   # frames de flash blanc
 
     def update_moon(self):
         if self.p5_cinematic_t > 0:
@@ -3565,6 +3568,14 @@ class Game:
             if self.player.dimension == DIM_DREAM:
                 self._draw_dream_warning()
 
+        # Flash sortie forcée du rêve
+        if self.dream_exit_flash > 0:
+            self.dream_exit_flash -= 1
+            fa = max(0, min(255, int(255 * self.dream_exit_flash / 12)))
+            fe = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            fe.fill((*Pal.D_ACCENT, fa))
+            self.screen.blit(fe, (0, 0))
+
         # ── Phase 5 cinematic zoom ──
         if hasattr(self, 'p5_cinematic_t') and self.p5_cinematic_t > 0:
             ct = self.p5_cinematic_t
@@ -3740,15 +3751,22 @@ class Game:
         ]
         for origin, tips in rng:
             for tip in tips:
-                pygame.draw.line(s, crack_col, origin, tip, max(1, int(2 * intensity)))
+                thickness = max(1, int(4 * intensity))
+                pygame.draw.line(s, crack_col, origin, tip, thickness)
+                # Deuxième ligne décalée pour effet plus épais
+                if intensity > 0.6:
+                    pygame.draw.line(s, (*Pal.D_ACCENT, min(255, int(alpha * 0.5))),
+                                     (origin[0]+2, origin[1]+2), (tip[0]+2, tip[1]+2),
+                                     max(1, int(2 * intensity)))
                 # petites branches
                 mid = ((origin[0] + tip[0]) // 2, (origin[1] + tip[1]) // 2)
                 branch = (mid[0] + (tip[1] - origin[1]) // 3,
                           mid[1] - (tip[0] - origin[0]) // 3)
                 pygame.draw.line(s, crack_col, mid, branch, 1)
         # Bordure rouge-violet qui pulse
-        border_alpha = int(80 + 80 * math.sin(self.frame * 0.25) * intensity)
-        pygame.draw.rect(s, (*Pal.D_ACCENT, border_alpha), (0, 0, WIDTH, HEIGHT), max(3, int(12 * intensity)))
+        border_alpha = max(0, min(255, int(100 + 155 * abs(math.sin(self.frame * 0.25)) * intensity)))
+        border_w = max(4, int(20 * intensity))
+        pygame.draw.rect(s, (*Pal.D_ACCENT, border_alpha), (0, 0, WIDTH, HEIGHT), border_w)
         self.screen.blit(s, (0, 0))
         # Texte d'avertissement
         if intensity > 0.5:
@@ -3868,16 +3886,20 @@ class Game:
         d_surf = self.font_sm.render(lbl, True, col)
         self.screen.blit(d_surf, (BAR_X, BAR_Y + BAR_H + 5))
 
-        cd_w = 220
-        cd_x = WIDTH // 2 - cd_w // 2
-        cd_y = 56
-        pygame.draw.rect(self.screen, Pal.UI_BG, (cd_x, cd_y, cd_w, 8), border_radius=4)
+        # ── Barre fissure (sous barre HP, même largeur) ───────────────────────
+        swap_y = BAR_Y + BAR_H + (14 if self.player.shield > 0 else 4)
         ready = self.player.swap_cooldown <= 0
-        frac = 1.0 if ready else 1.0 - self.player.swap_cooldown / SWAP_COOLDOWN
-        pygame.draw.rect(self.screen, col, (cd_x, cd_y, int(cd_w * frac), 8), border_radius=4)
+        swap_frac = 1.0 if ready else 1.0 - self.player.swap_cooldown / SWAP_COOLDOWN
+        swap_col = (100, 220, 255) if ready else (60, 120, 160)
+        pygame.draw.rect(self.screen, (15, 30, 40),
+                         (BAR_X, swap_y, BAR_W, 6), border_radius=3)
+        pygame.draw.rect(self.screen, swap_col,
+                         (BAR_X, swap_y, int(BAR_W * swap_frac), 6), border_radius=3)
         if ready:
-            r_lbl = self.font_sm.render("FISSURE PRÊTE — triple saut", True, col)
-            self.screen.blit(r_lbl, r_lbl.get_rect(midtop=(WIDTH // 2, cd_y + 12)))
+            pygame.draw.rect(self.screen, (180, 255, 255),
+                             (BAR_X, swap_y, BAR_W, 6), 1, border_radius=3)
+        swap_lbl = self.font_sm.render("FISSURE", True, swap_col)
+        self.screen.blit(swap_lbl, (BAR_X + BAR_W + 6, swap_y - 2))
 
         d_ready = self.player.dash_cooldown <= 0
         d_col = (255, 230, 130) if d_ready else (130, 100, 130)
@@ -3898,6 +3920,23 @@ class Game:
                             -math.pi / 2, -math.pi / 2 + math.tau * frac, 3)
         b_l = self.font_sm.render("ARC", True, b_col)
         self.screen.blit(b_l, (WIDTH - 80, HEIGHT - 50))
+
+        # ── Chrono rêve (haut à droite quand dimension == DIM_DREAM) ─────────
+        if self.player.dimension == DIM_DREAM:
+            remaining = max(0, DREAM_MAX_STAY - self.player.dream_stay_t)
+            secs = remaining // 60
+            frames = remaining % 60
+            chrono_col = (200, 160, 255) if remaining > DREAM_MAX_STAY * 0.35 else (255, 80, 120)
+            chrono_str = f"{secs}:{frames:02d}"
+            c_surf = self.font_med.render(chrono_str, True, chrono_col)
+            # Fond semi-transparent
+            pad = 6
+            cr = c_surf.get_rect(topright=(WIDTH - 12, 8))
+            bg_s = pygame.Surface((cr.w + pad * 2, cr.h + pad * 2), pygame.SRCALPHA)
+            bg_s.fill((0, 0, 0, 140))
+            pygame.draw.rect(bg_s, (*chrono_col, 100), (0, 0, cr.w + pad * 2, cr.h + pad * 2), 1, border_radius=4)
+            self.screen.blit(bg_s, (cr.x - pad, cr.y - pad))
+            self.screen.blit(c_surf, cr)
 
     def draw_boss_ui(self):
         if not self.boss: return
