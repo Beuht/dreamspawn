@@ -1453,8 +1453,8 @@ class MoonBoss:
         self.attack_timer -= 1
         if self.attack_timer <= 0:
             self.attacks_since_judgment += 1
-            # Jugement Lunaire à chaque attaque (spam)
-            if self.attacks_since_judgment >= 1:
+            # Jugement Lunaire toutes les 2 attaques
+            if self.attacks_since_judgment >= 2:
                 self._cast_lunar_judgment(beams, telegraphs, particles, player)
                 self.attacks_since_judgment = 0
                 self.p1_step = 0  # repart du début après le jugement
