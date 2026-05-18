@@ -1238,7 +1238,7 @@ class MoonBoss:
         self.cx = center_x; self.cy = center_y
         self.x = center_x; self.y = -120
         self.target_x = center_x; self.target_y = center_y - 140
-        self.radius = 70
+        self.radius = 95
         self.max_hp_total = 1000   # 200 HP par phase × 5
         self.hp = self.max_hp_total
         self.phase = 1
