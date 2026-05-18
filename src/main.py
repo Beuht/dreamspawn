@@ -1453,8 +1453,8 @@ class MoonBoss:
         self.attack_timer -= 1
         if self.attack_timer <= 0:
             self.attacks_since_judgment += 1
-            # Jugement Lunaire toutes les 2 attaques
-            if self.attacks_since_judgment >= 2:
+            # Jugement Lunaire toutes les 6 attaques
+            if self.attacks_since_judgment >= 6:
                 self._cast_lunar_judgment(beams, telegraphs, particles, player)
                 self.attacks_since_judgment = 0
                 self.p1_step = 0  # repart du début après le jugement
@@ -1466,13 +1466,13 @@ class MoonBoss:
             self.p1_step += 1
             if choice == "fan":
                 self._tg_crescent_fan(player, projectiles, telegraphs, dim=DIM_REAL, hits_any_dim=True)
-                self.attack_timer = 48
+                self.attack_timer = 120  # 2 sec
             elif choice == "meteor":
                 self._tg_meteor_targets(player, projectiles, telegraphs, particles, hits_any_dim=True)
-                self.attack_timer = 62
+                self.attack_timer = 120  # 2 sec
             else:  # star_curtain
                 self._tg_star_curtain(player, projectiles, telegraphs, hits_any_dim=True)
-                self.attack_timer = 80
+                self.attack_timer = 120  # 2 sec
 
     def _cast_lunar_judgment(self, beams, telegraphs, particles, player):
         """LE JUGEMENT STELLAIRE : chaîne de 6 ÉNORMES rayons (320px chacun)
