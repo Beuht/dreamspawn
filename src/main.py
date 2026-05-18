@@ -2972,8 +2972,12 @@ class Game:
 
     def toggle_fullscreen(self):
         self.fullscreen = not self.fullscreen
-        flags = pygame.FULLSCREEN if self.fullscreen else 0
-        self.screen = pygame.display.set_mode((WIDTH, HEIGHT), flags)
+        if self.fullscreen:
+            # SCALED maintient la résolution interne 1280×720 et scale à l'écran
+            self.screen = pygame.display.set_mode((WIDTH, HEIGHT),
+                                                   pygame.FULLSCREEN | pygame.SCALED)
+        else:
+            self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
 
     def reset_to_title(self):
         self.state = STATE_TITLE
