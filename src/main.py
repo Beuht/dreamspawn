@@ -2807,6 +2807,14 @@ _CIN_LINES = [
     "Va, Enfant Élu.\nJe serai toujours là pour te guider.",
 ]
 
+# Dialogue Aegis après chaque boss (fin de combat)
+_AEGIS_BOSS_LINES = [
+    "Bien joué, Enfant Élu.",
+    "Cette créature était puissante...\nmais tu l'as affaiblie pour moi.",
+    "Je suis là pour veiller sur toi.\nNe t'inquiète pas.",
+    "D'autres faux dieux vous attendent encore.\nTon chemin ne fait que commencer...",
+]
+
 
 class OverworldPlayer:
     """Personnage vue de dessus pour l'exploration (style Pokémon)."""
@@ -2998,6 +3006,25 @@ class Game:
         self.paused     = False
         self.pause_sel  = 0
 
+        # ── Dialogue Aegis post-boss ───────────────────────────────────────────
+        self.aegis_dialog_active  = False
+        self.aegis_dialog_line    = 0
+        self.aegis_dialog_char_t  = 0
+        self.aegis_dialog_fade    = 0
+        # Sprite Aegis angélique (14 frames 240×240, animé)
+        self._aegis_sheet   = None
+        self._aegis_frame_w = 240
+        self._aegis_anim_t  = 0
+        try:
+            _base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+            _raw  = pygame.image.load(
+                os.path.join(_base, "assets", "images", "aegis_angelic.png")
+            ).convert_alpha()
+            self._aegis_sheet   = _raw
+            self._aegis_frame_w = _raw.get_height()   # frames carrés
+        except Exception:
+            self._aegis_sheet = None
+
     def _load_settings(self):
         try:
             with open(self._settings_path, 'r') as f:
@@ -3096,6 +3123,8 @@ class Game:
     def reset_to_title(self):
         self.state = STATE_TITLE
         self.phase5_mode = False
+        self.aegis_dialog_active = False
+        self.paused = False
         self.particles = []
         self.projectiles_boss = []
         self.beams = []
@@ -3130,6 +3159,7 @@ class Game:
         self.state = STATE_HUB
 
     def start_moon(self):
+        self.aegis_dialog_active = False
         self.particles.clear()
         self.projectiles_boss.clear()
         self.beams.clear()
@@ -3237,6 +3267,15 @@ class Game:
                         if len(self.p_press_times) >= 10:
                             self.phase5_unlocked = True
                             self.p_press_times = []
+                    # ── Dialogue Aegis post-boss ──────────────────────────────────
+                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE) and self.state == STATE_MOON and self.aegis_dialog_active:
+                        line = _AEGIS_BOSS_LINES[self.aegis_dialog_line]
+                        total_chars = len(line.replace('\n', ''))
+                        chars_shown = min(total_chars, self.aegis_dialog_char_t // 2)
+                        if chars_shown < total_chars:
+                            self.aegis_dialog_char_t = total_chars * 2
+                        else:
+                            self._aegis_dialog_next()
                     # ── Cinématique : ENTRÉE / ESPACE → dialogue suivant ──────────
                     elif event.key in (pygame.K_RETURN, pygame.K_SPACE) and self.state == STATE_CINEMATIC:
                         line = _CIN_LINES[self.cin_line]
@@ -3336,7 +3375,9 @@ class Game:
                     _scy = self.player.rect.centery - self.cam[1]
                     self.player._aim_angle = math.atan2(_my - _scy, _mx - _scx)
                 self.draw_world(in_arena=True)
-                if self.final_blow_hub_t > 0:
+                if self.aegis_dialog_active:
+                    self.draw_aegis_dialog()
+                elif self.final_blow_hub_t > 0:
                     self._draw_victory_overlay()   # fond progressif + texte par-dessus
                 else:
                     self.draw_boss_ui()
@@ -3599,6 +3640,104 @@ class Game:
         except Exception:
             pass
 
+    # ── Dialogue Aegis post-boss ─────────────────────────────────────────────
+
+    def start_aegis_dialog(self):
+        self.aegis_dialog_active = True
+        self.aegis_dialog_line   = 0
+        self.aegis_dialog_char_t = 0
+        self.aegis_dialog_fade   = 0
+        self._aegis_anim_t       = 0
+
+    def _aegis_dialog_next(self):
+        self.aegis_dialog_line   += 1
+        self.aegis_dialog_char_t  = 0
+        if self.aegis_dialog_line >= len(_AEGIS_BOSS_LINES):
+            self.aegis_dialog_active = False
+            self.start_overworld()
+
+    def update_aegis_dialog(self):
+        self.aegis_dialog_char_t += 1
+        self.aegis_dialog_fade    = min(60, self.aegis_dialog_fade + 1)
+        self._aegis_anim_t       += 1
+
+    def draw_aegis_dialog(self):
+        surf = self.screen
+        t    = self._aegis_anim_t
+
+        # Overlay semi-transparent sur le fond de combat
+        ov = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        ov.fill((0, 0, 0, 140))
+        surf.blit(ov, (0, 0))
+
+        # ── Sprite Aegis (côté droit) ──────────────────────────────────────
+        sprite_x = WIDTH - 310
+        sprite_y = HEIGHT // 2 - 200
+        if self._aegis_sheet:
+            fw    = self._aegis_frame_w
+            n_fr  = self._aegis_sheet.get_width() // fw
+            frame = (t // 8) % n_fr
+            region = pygame.Rect(frame * fw, 0, fw, fw)
+            raw    = self._aegis_sheet.subsurface(region)
+            scaled = pygame.transform.scale(raw, (320, 320))
+            # Halo derrière le sprite
+            for r in range(80, 15, -12):
+                a = max(0, 50 - r // 2)
+                glow = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+                glow.fill((100, 160, 255, a))
+                surf.blit(glow, (sprite_x + 160 - r, sprite_y + 160 - r))
+            surf.blit(scaled, (sprite_x, sprite_y))
+        else:
+            # Fallback procedural si sprite absent
+            ax, ay = sprite_x + 160, sprite_y + 160
+            for r in range(80, 15, -12):
+                a = max(0, 50 - r // 2)
+                glow = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+                glow.fill((100, 160, 255, a))
+                surf.blit(glow, (ax - r, ay - r))
+            pygame.draw.circle(surf, (60, 110, 200), (ax, ay), 55)
+            pygame.draw.circle(surf, (200, 225, 255), (ax, ay), 22)
+
+        # ── Boîte de dialogue (bas gauche) ───────────────────────────────
+        line        = _AEGIS_BOSS_LINES[self.aegis_dialog_line]
+        total_chars = len(line.replace('\n', ''))
+        chars_shown = min(total_chars, self.aegis_dialog_char_t // 2)
+
+        box_w, box_h = WIDTH - 80, 150
+        box_x, box_y = 40, HEIGHT - box_h - 28
+        box = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
+        box.fill((14, 8, 32, 220))
+        surf.blit(box, (box_x, box_y))
+        pygame.draw.rect(surf, (80, 130, 220), (box_x, box_y, box_w, box_h), 2, border_radius=6)
+
+        name_s = self.font_sm.render("AEGIS", True, (140, 205, 255))
+        surf.blit(name_s, (box_x + 18, box_y + 12))
+
+        shown_count = 0
+        y_off = box_y + 42
+        for dl in line.split('\n'):
+            if shown_count >= chars_shown:
+                break
+            shown_here  = dl[:max(0, chars_shown - shown_count)]
+            shown_count += len(dl)
+            ts = self.font_med.render(shown_here, True, (215, 210, 255))
+            surf.blit(ts, (box_x + 18, y_off))
+            y_off += 38
+
+        # Indicateur ENTRÉE
+        if chars_shown >= total_chars:
+            if (t // 25) % 2 == 0:
+                hint = self.font_sm.render("[ ENTRÉE ]", True, (150, 180, 255))
+                surf.blit(hint, (WIDTH - 175, HEIGHT - 45))
+
+        # Fade-in
+        if self.aegis_dialog_fade < 60:
+            alpha = max(0, min(255, 255 - int(self.aegis_dialog_fade * 4.25)))
+            fo = pygame.Surface((WIDTH, HEIGHT))
+            fo.fill((0, 0, 0))
+            fo.set_alpha(alpha)
+            surf.blit(fo, (0, 0))
+
     def _check_parry(self):
         if not self.boss: return
         for proj in self.projectiles_boss:
@@ -3765,6 +3904,9 @@ class Game:
                   60, Pal.HP_FILL, 8.0, 50, 0.0, 5)
 
         if self.boss and self.boss.dead and not self.boss.final_blow_active:
+            if self.aegis_dialog_active:
+                self.update_aegis_dialog()
+                return
             if self.final_blow_hub_t == 0:
                 self.final_blow_hub_t = 1
                 self.player.score += 1500
@@ -3775,7 +3917,7 @@ class Game:
             else:
                 self.final_blow_hub_t += 1
                 if self.final_blow_hub_t >= 300:
-                    self.start_hub()
+                    self.start_aegis_dialog()
                     return
 
         self.update_camera(self.player.rect, bounds=(-220, -200, 1600, 800))
