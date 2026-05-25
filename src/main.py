@@ -3018,10 +3018,10 @@ class Game:
         try:
             _base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
             _raw  = pygame.image.load(
-                os.path.join(_base, "assets", "images", "aegis_angelic.png")
+                os.path.join(_base, "assets", "images", "aegis_final.png")
             ).convert_alpha()
             self._aegis_sheet   = _raw
-            self._aegis_frame_w = _raw.get_height()   # frames carrés
+            self._aegis_frame_w = _raw.get_height()   # frames carrés (240px)
         except Exception:
             self._aegis_sheet = None
 
@@ -3670,33 +3670,35 @@ class Game:
         ov.fill((0, 0, 0, 140))
         surf.blit(ov, (0, 0))
 
-        # ── Sprite Aegis (côté droit) ──────────────────────────────────────
-        sprite_x = WIDTH - 310
-        sprite_y = HEIGHT // 2 - 200
+        # ── Sprite Aegis (centré, très grand) ────────────────────────────
+        # Taille cible : hauteur 520px, ratio conservé (224/240 ≈ 0.933)
+        DST_H = 520
+        DST_W = int(DST_H * 224 / 240)   # ≈ 485px
+        sprite_cx = WIDTH // 2
+        sprite_y  = HEIGHT // 2 - DST_H // 2 - 30   # légèrement au-dessus du centre
         if self._aegis_sheet:
-            fw    = self._aegis_frame_w
-            n_fr  = self._aegis_sheet.get_width() // fw
-            frame = (t // 8) % n_fr
-            region = pygame.Rect(frame * fw, 0, fw, fw)
+            fw   = self._aegis_frame_w          # 240
+            n_fr = self._aegis_sheet.get_width() // fw   # 15
+            frame  = (t // 7) % n_fr
+            region = pygame.Rect(frame * fw, 0, fw, self._aegis_sheet.get_height())
             raw    = self._aegis_sheet.subsurface(region)
-            scaled = pygame.transform.scale(raw, (320, 320))
-            # Halo derrière le sprite
-            for r in range(80, 15, -12):
-                a = max(0, 50 - r // 2)
-                glow = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
-                glow.fill((100, 160, 255, a))
-                surf.blit(glow, (sprite_x + 160 - r, sprite_y + 160 - r))
-            surf.blit(scaled, (sprite_x, sprite_y))
+            scaled = pygame.transform.scale(raw, (DST_W, DST_H))
+            # Halo lumineux derrière
+            for r in (160, 130, 100, 70):
+                a  = max(0, 55 - r // 4)
+                gs = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+                gs.fill((120, 170, 255, a))
+                surf.blit(gs, (sprite_cx - r, sprite_y + DST_H // 2 - r))
+            surf.blit(scaled, (sprite_cx - DST_W // 2, sprite_y))
         else:
-            # Fallback procedural si sprite absent
-            ax, ay = sprite_x + 160, sprite_y + 160
-            for r in range(80, 15, -12):
-                a = max(0, 50 - r // 2)
-                glow = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
-                glow.fill((100, 160, 255, a))
-                surf.blit(glow, (ax - r, ay - r))
-            pygame.draw.circle(surf, (60, 110, 200), (ax, ay), 55)
-            pygame.draw.circle(surf, (200, 225, 255), (ax, ay), 22)
+            ax, ay = sprite_cx, sprite_y + DST_H // 2
+            for r in (160, 120, 80, 40):
+                a  = max(0, 55 - r // 4)
+                gs = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+                gs.fill((120, 170, 255, a))
+                surf.blit(gs, (ax - r, ay - r))
+            pygame.draw.circle(surf, (60, 110, 200), (ax, ay), 80)
+            pygame.draw.circle(surf, (200, 225, 255), (ax, ay), 35)
 
         # ── Boîte de dialogue (bas gauche) ───────────────────────────────
         line        = _AEGIS_BOSS_LINES[self.aegis_dialog_line]
@@ -3916,7 +3918,7 @@ class Game:
                           40, pal_accent(self.player.dimension), 8.0, 60, 0.0, 5)
             else:
                 self.final_blow_hub_t += 1
-                if self.final_blow_hub_t >= 300:
+                if self.final_blow_hub_t >= 120:
                     self.start_aegis_dialog()
                     return
 
@@ -4990,79 +4992,12 @@ class Game:
         self.screen.blit(s, (0, 0))
 
     def _draw_victory_overlay(self):
-        """Fond noir progressif sur le monde + texte blanc→doré. 5 sec → hub."""
+        """Simple fondu noir avant l'apparition d'Aegis."""
         t = self.final_blow_hub_t
-
-        def easeout(x):
-            x = max(0.0, min(1.0, x))
-            return 1.0 - (1.0 - x) ** 3
-
-        def lc(a, b, k):
-            return tuple(int(a[i] * (1 - k) + b[i] * k) for i in range(3))
-
-        # ── Voile noir qui s'intensifie lentement (120 frames = 2 sec) ───
-        black_a = int(255 * easeout(t / 120.0))
+        black_a = min(255, int(255 * t / 90.0))
         veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         veil.fill((0, 0, 0, black_a))
         self.screen.blit(veil, (0, 0))
-
-        # Texte visible seulement une fois le fond assez sombre (t > 60)
-        if t <= 60:
-            return
-
-        txt_t = t - 60   # temps relatif pour le texte
-        fade  = easeout(txt_t / 50.0)          # opacité texte 0→1
-        lerp  = easeout(txt_t / 100.0)         # couleur blanc→doré
-        txt_a = int(255 * fade)
-        if txt_a <= 0:
-            return
-
-        GOLD1  = (255, 248, 130)
-        GOLD2  = (255, 232, 100)
-        GOLD_S = (255, 242, 115)
-        GOLD_B = (220, 198,  95)
-
-        col1  = lc((255, 255, 255), GOLD1,  lerp)
-        col2  = lc((255, 255, 255), GOLD2,  lerp)
-        col_s = lc((255, 255, 255), GOLD_S, lerp)
-        col_b = lc((210, 210, 210), GOLD_B, lerp)
-
-        # ── Halo doré derrière le texte ───────────────────────────────────
-        glow_a = int(lerp * 40 * fade)
-        if glow_a > 1:
-            for w, h in [(700, 130), (500, 75)]:
-                gs = pygame.Surface((w, h), pygame.SRCALPHA)
-                gs.fill((*GOLD_S, glow_a))
-                self.screen.blit(gs, gs.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 11)))
-
-        # ── Séparateurs ───────────────────────────────────────────────────
-        sep_w = int(easeout(min(1.0, txt_t / 55.0)) * 370)
-        sep_a = int(220 * fade)
-        if sep_w > 4 and sep_a > 0:
-            for sep_y in (HEIGHT // 2 - 78, HEIGHT // 2 + 78):
-                ss = pygame.Surface((sep_w, 2), pygame.SRCALPHA)
-                ss.fill((*col_s, sep_a))
-                self.screen.blit(ss, ss.get_rect(center=(WIDTH // 2, sep_y)))
-
-        # ── Texte principal ───────────────────────────────────────────────
-        line1 = self.font_big.render("CE N'EST PAS", True, col1)
-        line1.set_alpha(txt_a)
-        self.screen.blit(line1, line1.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 44)))
-
-        line2 = self.font_big.render("LE MOMENT VENU", True, col2)
-        line2.set_alpha(txt_a)
-        self.screen.blit(line2, line2.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 22)))
-
-        # ── Sous-titre ────────────────────────────────────────────────────
-        if txt_t > 80:
-            sub_a = min(155, int(155 * (txt_t - 80) / 45))
-            secs = max(1, (300 - t) // 60 + 1)
-            sub = self.font_med.render(
-                f"Retour au sanctuaire dans {secs}s…    R — maintenant",
-                True, col_b
-            )
-            sub.set_alpha(sub_a)
-            self.screen.blit(sub, sub.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 100)))
 
 
 def main():
