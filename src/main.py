@@ -2759,11 +2759,109 @@ class StarField:
 # GAME
 # ---------------------------------------------------------------------------
 
-STATE_TITLE = "title"
-STATE_HUB = "hub"
-STATE_MOON = "moon"
-STATE_VICTORY = "victory"
-STATE_GAMEOVER = "gameover"
+STATE_TITLE      = "title"
+STATE_CINEMATIC  = "cinematic"
+STATE_OVERWORLD  = "overworld"
+STATE_HUB        = "hub"
+STATE_MOON       = "moon"
+STATE_VICTORY    = "victory"
+STATE_GAMEOVER   = "gameover"
+
+# ── Overworld — carte de départ (32×20 tuiles, OW_TILE px chacune) ──────────
+OW_TILE     = 40
+OW_FLOOR    = 0
+OW_WALL     = 1
+OW_PORTAL_M = 2      # portail vers Boss Lune
+
+_OW_TILES = [
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,1],
+    [1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,2,2,2,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,2,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,2,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,2,2,2,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,1],
+    [1,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,1],
+    [1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+]
+_OW_SPAWN_COL, _OW_SPAWN_ROW = 15, 13
+
+# ── Dialogues cinématique d'ouverture (Aegis angélique réveille le héros) ───
+_CIN_LINES = [
+    "...",
+    "Réveille-toi, enfant.",
+    "Je suis Aegis, gardien de la Terre.\nTu as été choisi pour libérer ce monde.",
+    "Des faux dieux corrompent les âmes\ndepuis des millénaires. Le peuple souffre.",
+    "Commence par la Lune. Son temple est\nau nord de ce sanctuaire.",
+    "Va, Enfant Élu.\nJe serai toujours là pour te guider.",
+]
+
+
+class OverworldPlayer:
+    """Personnage vue de dessus pour l'exploration (style Pokémon)."""
+    SPD  = 4
+    HALF = 14   # demi-taille hitbox px
+
+    def __init__(self, x, y):
+        self.x       = float(x)
+        self.y       = float(y)
+        self.facing  = "down"
+        self.walk_t  = 0
+
+    def _rect(self):
+        h = self.HALF
+        return pygame.Rect(int(self.x) - h, int(self.y) - h, h * 2, h * 2)
+
+    def update(self, keys, walls):
+        dx = dy = 0.0
+        if keys[pygame.K_UP]    or keys[pygame.K_z]: dy -= self.SPD; self.facing = "up"
+        if keys[pygame.K_DOWN]  or keys[pygame.K_s]: dy += self.SPD; self.facing = "down"
+        if keys[pygame.K_LEFT]  or keys[pygame.K_q]: dx -= self.SPD; self.facing = "left"
+        if keys[pygame.K_RIGHT] or keys[pygame.K_d]: dx += self.SPD; self.facing = "right"
+        if dx and dy:
+            dx *= 0.707; dy *= 0.707
+        if dx or dy:
+            self.walk_t += 1
+        h = self.HALF
+        # X
+        self.x += dx
+        r = self._rect()
+        for w in walls:
+            if r.colliderect(w):
+                if dx > 0: self.x = w.left  - h
+                else:      self.x = w.right + h
+        # Y
+        self.y += dy
+        r = self._rect()
+        for w in walls:
+            if r.colliderect(w):
+                if dy > 0: self.y = w.top    - h
+                else:      self.y = w.bottom + h
+
+    def draw(self, surf, cam, frame):
+        sx = int(self.x) - cam[0]
+        sy = int(self.y) - cam[1]
+        # Ombre portée
+        shad = pygame.Surface((28, 10), pygame.SRCALPHA)
+        shad.fill((0, 0, 0, 55))
+        surf.blit(shad, (sx - 14, sy + 10))
+        # Corps
+        pygame.draw.circle(surf, (170, 120, 80), (sx, sy), 13)
+        pygame.draw.circle(surf, (230, 185, 130), (sx, sy), 9)
+        # Indicateur direction
+        d = {"up": (0,-1), "down": (0,1), "left": (-1,0), "right": (1,0)}[self.facing]
+        pygame.draw.circle(surf, (255, 230, 170), (sx + d[0]*12, sy + d[1]*12), 4)
 
 
 class Game:
@@ -2883,6 +2981,22 @@ class Game:
         self.sfx_vol   = 0.15
         self.controls_scroll = 0
         self._load_settings()
+
+        # ── Overworld ─────────────────────────────────────────────────────────
+        self.ow_player  = None
+        self.ow_walls   = []
+        self.ow_portals = []
+        self.ow_cam     = [0, 0]
+
+        # ── Cinématique d'ouverture ───────────────────────────────────────────
+        self.cin_line   = 0
+        self.cin_char_t = 0
+        self.cin_hold_t = 0
+        self.cin_fade   = 0   # 0→60 = fade-in, reste à 60 ensuite
+
+        # ── Pause (overworld uniquement) ──────────────────────────────────────
+        self.paused     = False
+        self.pause_sel  = 0
 
     def _load_settings(self):
         try:
@@ -3113,7 +3227,7 @@ class Game:
                         # F11 (Windows) ET F (universel, Mac n'intercepte pas)
                         self.toggle_fullscreen()
                     elif event.key == pygame.K_RETURN and self.state == STATE_TITLE:
-                        self.start_hub()
+                        self.start_cinematic()
                     elif event.key == pygame.K_c and self.state == STATE_TITLE:
                         self.show_controls_popup = not self.show_controls_popup
                     elif event.key == pygame.K_p and self.state == STATE_TITLE:
@@ -3123,8 +3237,34 @@ class Game:
                         if len(self.p_press_times) >= 10:
                             self.phase5_unlocked = True
                             self.p_press_times = []
+                    # ── Cinématique : ENTRÉE / ESPACE → dialogue suivant ──────────
+                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE) and self.state == STATE_CINEMATIC:
+                        line = _CIN_LINES[self.cin_line]
+                        total_chars = len(line.replace('\n', ''))
+                        chars_shown = min(total_chars, self.cin_char_t // 2)
+                        if chars_shown < total_chars:
+                            self.cin_char_t = total_chars * 2  # affiche tout immédiatement
+                        elif self.cin_line > 0:
+                            self._cin_next()
+                    # ── Overworld / Pause ──────────────────────────────────────────
+                    elif event.key == pygame.K_p and self.state == STATE_OVERWORLD:
+                        self.toggle_pause()
+                    elif event.key == pygame.K_ESCAPE and self.state == STATE_OVERWORLD:
+                        if self.paused:
+                            self.toggle_pause()
+                        else:
+                            self.reset_to_title()
+                    elif self.state == STATE_OVERWORLD and self.paused:
+                        if event.key == pygame.K_UP:
+                            self.pause_sel = (self.pause_sel - 1) % 3
+                        elif event.key == pygame.K_DOWN:
+                            self.pause_sel = (self.pause_sel + 1) % 3
+                        elif event.key == pygame.K_RETURN:
+                            if self.pause_sel == 0:   self.toggle_pause()
+                            elif self.pause_sel == 1: self.save_game(); self.toggle_pause()
+                            elif self.pause_sel == 2: self.reset_to_title()
                     elif event.key == pygame.K_r and self.state in (STATE_GAMEOVER, STATE_VICTORY):
-                        self.start_hub()
+                        self.start_overworld()
                     elif event.key == pygame.K_r and self.state == STATE_MOON and self.final_blow_hub_t > 0:
                         self.start_hub()
                     elif event.key == pygame.K_SPACE and self.state in (STATE_HUB, STATE_MOON):
@@ -3143,7 +3283,7 @@ class Game:
                     if event.button == 1:
                         if self.start_btn_rect.collidepoint(event.pos):
                             self.phase5_mode = False
-                            self.start_hub()
+                            self.start_cinematic()
                         elif self.phase5_unlocked and self.start_phase5_btn_rect.collidepoint(event.pos):
                             self.phase5_mode = True
                             self.start_hub()
@@ -3169,6 +3309,14 @@ class Game:
             if self.state == STATE_TITLE:
                 self.title_pulse_t += 1
                 self.draw_title()
+            elif self.state == STATE_CINEMATIC:
+                if do_update:
+                    self.update_cinematic()
+                self.draw_cinematic()
+            elif self.state == STATE_OVERWORLD:
+                if do_update:
+                    self.update_overworld()
+                self.draw_overworld()
             elif self.state == STATE_HUB:
                 if do_update: self.update_hub()
                 # Mise à jour de l'angle de visée depuis la souris
@@ -3210,6 +3358,246 @@ class Game:
             pygame.display.flip()
 
         pygame.quit()
+
+    # ── Cinématique ──────────────────────────────────────────────────────────
+
+    def start_cinematic(self):
+        self.cin_line   = 0
+        self.cin_char_t = 0
+        self.cin_hold_t = 0
+        self.cin_fade   = 0
+        self.state = STATE_CINEMATIC
+
+    def _cin_next(self):
+        self.cin_line   += 1
+        self.cin_char_t  = 0
+        self.cin_hold_t  = 0
+        if self.cin_line >= len(_CIN_LINES):
+            self.start_overworld()
+
+    def update_cinematic(self):
+        self.cin_char_t += 1
+        self.cin_fade = min(60, self.cin_fade + 1)
+        line = _CIN_LINES[self.cin_line]
+        total_chars = len(line.replace('\n', ''))
+        chars_shown = min(total_chars, self.cin_char_t // 2)
+        # Première ligne ("...") s'avance automatiquement après 120 frames de pause
+        if self.cin_line == 0 and chars_shown >= total_chars:
+            self.cin_hold_t += 1
+            if self.cin_hold_t > 120:
+                self._cin_next()
+
+    def draw_cinematic(self):
+        surf = self.screen
+        t    = self.frame
+        surf.fill((8, 5, 18))
+
+        # Étoiles de fond
+        for i in range(80):
+            rx = (i * 137 + 42) % WIDTH
+            ry = (i * 91  + 17) % (HEIGHT - 180)
+            pygame.draw.circle(surf, (180, 160, 240), (rx, ry), 1)
+
+        # ── Aegis angélique (centre-haut) ─────────────────────────────────
+        ax, ay = WIDTH // 2, HEIGHT // 2 - 60
+        # Halo
+        for r in range(90, 15, -12):
+            a = max(0, 55 - r // 2)
+            glow = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+            glow.fill((100, 150, 255, a))
+            surf.blit(glow, (ax - r, ay - r))
+        pygame.draw.circle(surf, (50, 90, 190), (ax, ay), 44)
+        pygame.draw.circle(surf, (90, 150, 255), (ax, ay), 34)
+        pygame.draw.circle(surf, (200, 220, 255), (ax, ay), 19)
+        pygame.draw.circle(surf, (255, 245, 210), (ax, ay), 10)
+        # Couronne de rayons
+        for i in range(7):
+            angle = -math.pi / 2 + i * (math.pi * 2 / 7)
+            ex = ax + int(math.cos(angle) * 55)
+            ey = ay + int(math.sin(angle) * 55)
+            pygame.draw.line(surf, (160, 200, 255), (ax, ay), (ex, ey), 2)
+            pygame.draw.circle(surf, (220, 240, 255), (ex, ey), 4)
+        # Anneau pulsant
+        pulse = int(abs(math.sin(t * 0.04)) * 14)
+        cr = 62 + pulse
+        ring = pygame.Surface((cr * 2, cr * 2), pygame.SRCALPHA)
+        pygame.draw.circle(ring, (140, 190, 255, 45), (cr, cr), cr, 3)
+        surf.blit(ring, (ax - cr, ay - cr))
+
+        # ── Dialogue box ──────────────────────────────────────────────────
+        line = _CIN_LINES[self.cin_line]
+        total_chars = len(line.replace('\n', ''))
+        chars_shown = min(total_chars, self.cin_char_t // 2)
+
+        box_h  = 150
+        box_y  = HEIGHT - box_h - 28
+        box_x  = 40
+        box_w  = WIDTH - 80
+        box    = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
+        box.fill((14, 8, 32, 215))
+        surf.blit(box, (box_x, box_y))
+        pygame.draw.rect(surf, (80, 120, 210), (box_x, box_y, box_w, box_h), 2, border_radius=6)
+
+        # Nom
+        name_surf = self.font_sm.render("AEGIS", True, (140, 200, 255))
+        surf.blit(name_surf, (box_x + 18, box_y + 12))
+
+        # Texte lettre à lettre
+        shown_count = 0
+        y_off = box_y + 42
+        for dl in line.split('\n'):
+            if shown_count >= chars_shown:
+                break
+            shown_here = dl[:max(0, chars_shown - shown_count)]
+            shown_count += len(dl)
+            ts = self.font_med.render(shown_here, True, (215, 210, 255))
+            surf.blit(ts, (box_x + 18, y_off))
+            y_off += 38
+
+        # Indicateur "ENTRÉE" clignote quand texte complet
+        if chars_shown >= total_chars and self.cin_line > 0:
+            if (t // 25) % 2 == 0:
+                hint = self.font_sm.render("[ ENTRÉE ]", True, (150, 175, 255))
+                surf.blit(hint, (WIDTH - 170, HEIGHT - 45))
+
+        # Fade-in overlay
+        if self.cin_fade < 60:
+            alpha = max(0, min(255, 255 - int(self.cin_fade * 4.25)))
+            fo = pygame.Surface((WIDTH, HEIGHT))
+            fo.fill((0, 0, 0))
+            fo.set_alpha(alpha)
+            surf.blit(fo, (0, 0))
+
+    # ── Overworld ────────────────────────────────────────────────────────────
+
+    def start_overworld(self):
+        T = OW_TILE
+        self.ow_walls   = []
+        self.ow_portals = []
+        for row_i, row in enumerate(_OW_TILES):
+            for col_i, tile in enumerate(row):
+                r = pygame.Rect(col_i * T, row_i * T, T, T)
+                if tile == OW_WALL:
+                    self.ow_walls.append(r)
+                elif tile == OW_PORTAL_M:
+                    self.ow_portals.append(r)
+        sx = _OW_SPAWN_COL * T + T // 2
+        sy = _OW_SPAWN_ROW * T + T // 2
+        self.ow_player  = OverworldPlayer(sx, sy)
+        self.ow_cam     = [0, 0]
+        self.paused     = False
+        self.state      = STATE_OVERWORLD
+
+    def update_overworld(self):
+        if self.paused:
+            return
+        keys = pygame.key.get_pressed()
+        self.ow_player.update(keys, self.ow_walls)
+        # Caméra centrée sur le joueur, clampée aux bords de la map
+        T     = OW_TILE
+        map_w = len(_OW_TILES[0]) * T
+        map_h = len(_OW_TILES)    * T
+        px    = int(self.ow_player.x) - WIDTH  // 2
+        py    = int(self.ow_player.y) - HEIGHT // 2
+        self.ow_cam[0] = max(0, min(px, map_w - WIDTH))
+        self.ow_cam[1] = max(0, min(py, map_h - HEIGHT))
+        # Collision portail → combat
+        pr = self.ow_player._rect()
+        for p in self.ow_portals:
+            if pr.colliderect(p):
+                self.start_moon()
+                return
+
+    def draw_overworld(self):
+        surf = self.screen
+        cam  = self.ow_cam
+        T    = OW_TILE
+        t    = self.frame
+
+        surf.fill((8, 5, 18))
+
+        # Tuiles visibles
+        col0 = max(0, cam[0] // T)
+        col1 = min(len(_OW_TILES[0]), (cam[0] + WIDTH)  // T + 2)
+        row0 = max(0, cam[1] // T)
+        row1 = min(len(_OW_TILES),    (cam[1] + HEIGHT) // T + 2)
+
+        for ri in range(row0, row1):
+            for ci in range(col0, col1):
+                tile = _OW_TILES[ri][ci]
+                rx   = ci * T - cam[0]
+                ry   = ri * T - cam[1]
+                if tile == OW_WALL:
+                    pygame.draw.rect(surf, (20, 13, 35), (rx, ry, T, T))
+                    pygame.draw.rect(surf, (38, 24, 58), (rx, ry, T, T), 1)
+                elif tile == OW_FLOOR:
+                    pygame.draw.rect(surf, (28, 20, 42), (rx, ry, T, T))
+                    pygame.draw.rect(surf, (36, 27, 52), (rx, ry, T, T), 1)
+                elif tile == OW_PORTAL_M:
+                    pulse = int(abs(math.sin(t * 0.05 + ci + ri)) * 28)
+                    pygame.draw.rect(surf, (55 + pulse, 18, 78 + pulse), (rx, ry, T, T))
+                    pygame.draw.rect(surf, (140, 80, 200), (rx, ry, T, T), 2)
+
+        # Label portail Lune
+        if self.ow_portals:
+            p   = self.ow_portals[0]
+            lx  = p.x + p.w // 2 - cam[0]
+            ly  = p.y - 24 - cam[1]
+            lbl = self.font_sm.render("Temple de la Lune", True, (190, 130, 255))
+            surf.blit(lbl, (lx - lbl.get_width() // 2, ly))
+
+        self.ow_player.draw(surf, cam, t)
+
+        # HUD minimal
+        hint = self.font_sm.render("P — Pause", True, (80, 70, 110))
+        surf.blit(hint, (10, 10))
+
+        if self.paused:
+            self.draw_pause_menu()
+
+    # ── Menu Pause ───────────────────────────────────────────────────────────
+
+    def toggle_pause(self):
+        self.paused = not self.paused
+        if self.paused:
+            self.pause_sel = 0
+
+    def draw_pause_menu(self):
+        surf = self.screen
+        # Overlay
+        ov = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        ov.fill((0, 0, 0, 165))
+        surf.blit(ov, (0, 0))
+        # Panneau
+        pw, ph = 340, 270
+        pmx = (WIDTH - pw) // 2
+        pmy = (HEIGHT - ph) // 2
+        pn  = pygame.Surface((pw, ph), pygame.SRCALPHA)
+        pn.fill((18, 10, 36, 235))
+        surf.blit(pn, (pmx, pmy))
+        pygame.draw.rect(surf, (90, 60, 165), (pmx, pmy, pw, ph), 2, border_radius=8)
+        # Titre
+        ti = self.font_med.render("— PAUSE —", True, (200, 180, 255))
+        surf.blit(ti, (pmx + (pw - ti.get_width()) // 2, pmy + 22))
+        # Options
+        opts = ["Reprendre", "Sauvegarder", "Quitter"]
+        for i, opt in enumerate(opts):
+            sel = (i == self.pause_sel)
+            col = (255, 230, 100) if sel else (175, 155, 225)
+            pre = "▶  " if sel else "   "
+            ts  = self.font_med.render(pre + opt, True, col)
+            surf.blit(ts, (pmx + 45, pmy + 85 + i * 54))
+
+    def save_game(self):
+        if not self.ow_player:
+            return
+        data = {"ow_x": self.ow_player.x, "ow_y": self.ow_player.y}
+        path = os.path.join(os.path.expanduser("~"), ".dreamspawn_save.json")
+        try:
+            with open(path, 'w') as f:
+                json.dump(data, f)
+        except Exception:
+            pass
 
     def _check_parry(self):
         if not self.boss: return
