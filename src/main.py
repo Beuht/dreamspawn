@@ -3016,13 +3016,15 @@ class Game:
         self._aegis_frame_w = 240
         self._aegis_anim_t  = 0
         try:
-            _base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-            _raw  = pygame.image.load(
-                os.path.join(_base, "assets", "images", "aegis_final.png")
-            ).convert_alpha()
+            # Les assets sont dans dreamspawn/assets/, un niveau au-dessus de src/
+            _src_dir  = os.path.dirname(os.path.abspath(__file__))
+            _root_dir = getattr(sys, '_MEIPASS', os.path.dirname(_src_dir))
+            _aegis_path = os.path.join(_root_dir, "assets", "images", "aegis_final.png")
+            _raw  = pygame.image.load(_aegis_path).convert_alpha()
             self._aegis_sheet   = _raw
             self._aegis_frame_w = _raw.get_height()   # frames carrés (240px)
-        except Exception:
+        except Exception as e:
+            print(f"[AEGIS] ERREUR chargement: {e}")
             self._aegis_sheet = None
 
     def _load_settings(self):
