@@ -4564,25 +4564,6 @@ class Game:
         swap_lbl = self.font_sm.render("FISSURE", True, swap_col)
         self.screen.blit(swap_lbl, (BAR_X + BAR_W + 6, swap_y - 2))
 
-        d_ready = self.player.dash_cooldown <= 0
-        d_col = (255, 230, 130) if d_ready else (130, 100, 130)
-        pygame.draw.circle(self.screen, d_col, (40, HEIGHT - 40), 12, 0 if d_ready else 2)
-        d_l = self.font_sm.render("DASH (A)", True, d_col)
-        self.screen.blit(d_l, (60, HEIGHT - 50))
-
-        # Indicateur de cooldown d'arc (cercle en bas à droite)
-        bow_ready = self.player.bow_cd <= 0
-        b_col = Pal.ARROW if bow_ready else (140, 110, 60)
-        pygame.draw.circle(self.screen, b_col, (WIDTH - 40, HEIGHT - 40),
-                           12, 0 if bow_ready else 2)
-        if not bow_ready:
-            # arc de progression
-            frac = 1.0 - self.player.bow_cd / BOW_COOLDOWN
-            pygame.draw.arc(self.screen, Pal.ARROW,
-                            (WIDTH - 56, HEIGHT - 56, 32, 32),
-                            -math.pi / 2, -math.pi / 2 + math.tau * frac, 3)
-        b_l = self.font_sm.render("ARC", True, b_col)
-        self.screen.blit(b_l, (WIDTH - 80, HEIGHT - 50))
 
         # ── Chrono rêve (haut à droite quand dimension == DIM_DREAM) ─────────
         if self.player.dimension == DIM_DREAM:
@@ -4715,7 +4696,7 @@ class Game:
                 'active': False,
             },
             {
-                'key': 'A/Maj',
+                'key': 'A / Maj',
                 'name': 'Dash',
                 'cd': self.player.dash_cooldown,
                 'cd_max': DASH_COOLDOWN,
@@ -4735,82 +4716,110 @@ class Game:
                 'active': self.ability_shield_t > 0,
             })
 
-        SLOT = 64
-        GAP  = 14
+        SLOT = 72
+        GAP  = 16
         total_w = len(skills) * SLOT + (len(skills) - 1) * GAP
-        sx0 = WIDTH // 2 - total_w // 2
-        sy0 = HEIGHT - SLOT - 18
+        # Panneau fond global
+        PAD_X, PAD_Y = 18, 10
+        panel_w = total_w + PAD_X * 2
+        panel_h = SLOT + PAD_Y * 2 + 20  # +20 pour le nom en bas
+        px = WIDTH // 2 - panel_w // 2
+        py = HEIGHT - panel_h - 8
+        panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+        panel.fill((8, 5, 18, 210))
+        # Bordure dorée fine
+        pygame.draw.rect(panel, (140, 110, 40), (0, 0, panel_w, panel_h), 1, border_radius=6)
+        pygame.draw.rect(panel, (60, 45, 15), (1, 1, panel_w - 2, panel_h - 2), 1, border_radius=5)
+        self.screen.blit(panel, (px, py))
+
+        sx0 = px + PAD_X
+        sy0 = py + PAD_Y
 
         for i, sk in enumerate(skills):
             sx = sx0 + i * (SLOT + GAP)
             cx = sx + SLOT // 2
             cy = sy0 + SLOT // 2
             col = sk['color']
+            ready = sk['cd'] <= 0
 
-            # ── Fond slot ─────────────────────────────────────────────────────
+            # ── Glow actif (derrière le slot) ─────────────────────────────────
+            if sk['active']:
+                pulse = abs(math.sin(self.frame * 0.15))
+                glow  = pygame.Surface((SLOT + 12, SLOT + 12), pygame.SRCALPHA)
+                pygame.draw.rect(glow,
+                                 (*col, int(80 + 90 * pulse)),
+                                 (0, 0, SLOT + 12, SLOT + 12), 4, border_radius=8)
+                self.screen.blit(glow, (sx - 6, sy0 - 6))
+
+            # ── Fond slot (texture Soulslike ou fallback) ─────────────────────
             if self._ui_slot:
-                self.screen.blit(self._ui_slot, (sx, sy0))
+                slot_scaled = pygame.transform.scale(self._ui_slot, (SLOT, SLOT))
+                self.screen.blit(slot_scaled, (sx, sy0))
             else:
-                pygame.draw.rect(self.screen, (18, 12, 28),
+                pygame.draw.rect(self.screen, (22, 15, 35),
                                  (sx, sy0, SLOT, SLOT), border_radius=5)
-                pygame.draw.rect(self.screen, (70, 50, 100),
-                                 (sx, sy0, SLOT, SLOT), 2, border_radius=5)
+            # Bordure slot colorée (dorée si prêt, grise si cooldown)
+            border_col = (180, 140, 50) if ready else (60, 50, 80)
+            pygame.draw.rect(self.screen, border_col,
+                             (sx, sy0, SLOT, SLOT), 2, border_radius=5)
 
             # ── Icône procédurale ─────────────────────────────────────────────
+            icon_col = col if ready else tuple(c // 2 for c in col)
             if sk['icon'] == 'sword':
-                pygame.draw.line(self.screen, col,
-                                 (cx - 13, cy + 13), (cx + 13, cy - 13), 3)
-                pygame.draw.line(self.screen, col,
-                                 (cx - 9, cy - 5), (cx - 2, cy + 2), 2)
-                pygame.draw.circle(self.screen, col, (cx - 13, cy + 13), 3)
+                pygame.draw.line(self.screen, icon_col,
+                                 (cx - 15, cy + 15), (cx + 15, cy - 15), 4)
+                pygame.draw.line(self.screen, icon_col,
+                                 (cx - 10, cy - 4), (cx - 1, cy + 5), 3)
+                pygame.draw.circle(self.screen, icon_col, (cx - 15, cy + 15), 4)
             elif sk['icon'] == 'dash':
-                pts = [(cx + 15, cy),
-                       (cx + 3,  cy - 9),
-                       (cx + 3,  cy - 4),
-                       (cx - 15, cy - 4),
-                       (cx - 15, cy + 4),
-                       (cx + 3,  cy + 4),
-                       (cx + 3,  cy + 9)]
-                pygame.draw.polygon(self.screen, col, pts)
+                pts = [(cx + 17, cy),
+                       (cx + 4,  cy - 10),
+                       (cx + 4,  cy - 5),
+                       (cx - 17, cy - 5),
+                       (cx - 17, cy + 5),
+                       (cx + 4,  cy + 5),
+                       (cx + 4,  cy + 10)]
+                pygame.draw.polygon(self.screen, icon_col, pts)
             elif sk['icon'] == 'shield':
-                pts = [(cx, cy - 15),
-                       (cx + 13, cy - 7),
-                       (cx + 13, cy + 5),
-                       (cx,      cy + 15),
-                       (cx - 13, cy + 5),
-                       (cx - 13, cy - 7)]
-                pygame.draw.polygon(self.screen, col, pts)
+                pts = [(cx, cy - 17),
+                       (cx + 14, cy - 8),
+                       (cx + 14, cy + 6),
+                       (cx,      cy + 17),
+                       (cx - 14, cy + 6),
+                       (cx - 14, cy - 8)]
+                pygame.draw.polygon(self.screen, icon_col, pts)
                 pygame.draw.polygon(self.screen, (10, 5, 20), pts, 2)
-                pygame.draw.line(self.screen, (200, 220, 255),
-                                 (cx, cy - 9), (cx, cy + 7), 2)
-                pygame.draw.line(self.screen, (200, 220, 255),
-                                 (cx - 7, cy), (cx + 7, cy), 2)
+                pygame.draw.line(self.screen, tuple(min(255, c + 80) for c in icon_col),
+                                 (cx, cy - 10), (cx, cy + 8), 2)
+                pygame.draw.line(self.screen, tuple(min(255, c + 80) for c in icon_col),
+                                 (cx - 8, cy), (cx + 8, cy), 2)
 
             # ── Overlay cooldown (de haut vers le bas) ────────────────────────
             if sk['cd'] > 0 and sk['cd_max'] > 0:
-                frac     = min(1.0, sk['cd'] / sk['cd_max'])
-                ov_h     = max(1, int(SLOT * frac))
-                ov_surf  = pygame.Surface((SLOT, ov_h), pygame.SRCALPHA)
-                ov_surf.fill((0, 0, 0, 185))
+                frac    = min(1.0, sk['cd'] / sk['cd_max'])
+                ov_h    = max(1, int(SLOT * frac))
+                ov_surf = pygame.Surface((SLOT, ov_h), pygame.SRCALPHA)
+                ov_surf.fill((0, 0, 0, 190))
                 self.screen.blit(ov_surf, (sx, sy0))
-                # Compteur secondes (uniquement si cooldown long > 1s)
+                # Barre de progression fine en bas du slot
+                bar_frac  = 1.0 - frac
+                bar_w_px  = max(1, int(SLOT * bar_frac))
+                pygame.draw.rect(self.screen, (30, 20, 50),
+                                 (sx, sy0 + SLOT - 5, SLOT, 4), border_radius=2)
+                pygame.draw.rect(self.screen, col,
+                                 (sx, sy0 + SLOT - 5, bar_w_px, 4), border_radius=2)
+                # Compteur secondes centré (si > 1s)
                 if sk['cd'] > 60:
                     secs = math.ceil(sk['cd'] / 60)
-                    ct = self.font_sm.render(str(secs) + "s", True, (210, 210, 230))
+                    ct = self.font_sm.render(f"{secs}s", True, (230, 220, 255))
                     self.screen.blit(ct, ct.get_rect(center=(cx, cy)))
 
-            # ── Glow actif ────────────────────────────────────────────────────
-            if sk['active']:
-                pulse = abs(math.sin(self.frame * 0.15))
-                glow  = pygame.Surface((SLOT + 10, SLOT + 10), pygame.SRCALPHA)
-                pygame.draw.rect(glow,
-                                 (*col, int(100 + 80 * pulse)),
-                                 (0, 0, SLOT + 10, SLOT + 10), 3, border_radius=6)
-                self.screen.blit(glow, (sx - 5, sy0 - 5))
-
-            # ── Touche en dessous ─────────────────────────────────────────────
-            key_s = self.font_sm.render(sk['key'], True, (150, 150, 185))
-            self.screen.blit(key_s, key_s.get_rect(midtop=(cx, sy0 + SLOT + 4)))
+            # ── Nom + touche en bas du slot ───────────────────────────────────
+            name_col = (200, 180, 255) if ready else (100, 90, 130)
+            name_s = self.font_sm.render(sk['name'], True, name_col)
+            key_s  = self.font_sm.render(f"[{sk['key']}]", True, (120, 110, 160))
+            self.screen.blit(name_s, name_s.get_rect(midtop=(cx, sy0 + SLOT + 5)))
+            self.screen.blit(key_s,  key_s.get_rect(midtop=(cx, sy0 + SLOT + 5 + name_s.get_height())))
 
     def draw_announce(self):
         if self.announce_t <= 0 or not self.announce_text: return
