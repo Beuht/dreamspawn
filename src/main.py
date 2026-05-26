@@ -3006,6 +3006,17 @@ class Game:
         self.paused     = False
         self.pause_sel  = 0
 
+        # ── Animation sauvegarde (style DS) ───────────────────────────────────
+        self.save_anim_t   = 0     # 0=inactif, 1→150=animation
+        self.SAVE_ANIM_DUR = 150
+
+        # ── Compétence Bouclier (débloquée par Aegis après Boss Lune) ─────────
+        self.shield_unlocked    = False
+        self.ability_shield_t   = 0    # frames actif restantes (120 = 2s)
+        self.ability_shield_cd  = 0    # cooldown restant (300 = 5s)
+        self.SHIELD_DUR         = 120
+        self.SHIELD_CD          = 300
+
         # ── Dialogue Aegis post-boss ───────────────────────────────────────────
         self.aegis_dialog_active  = False
         self.aegis_dialog_line    = 0
@@ -3269,6 +3280,16 @@ class Game:
                         if len(self.p_press_times) >= 10:
                             self.phase5_unlocked = True
                             self.p_press_times = []
+                    # ── Bouclier (touche 1) ───────────────────────────────────────
+                    elif (event.key == pygame.K_1 and self.state == STATE_MOON
+                          and self.shield_unlocked
+                          and self.ability_shield_cd == 0
+                          and self.ability_shield_t == 0):
+                        self.ability_shield_t  = self.SHIELD_DUR
+                        self.ability_shield_cd = self.SHIELD_CD
+                        burst(self.particles,
+                              self.player.rect.centerx, self.player.rect.centery,
+                              20, (100, 200, 255), 6.0, 30, 0.0, 4)
                     # ── Dialogue Aegis post-boss ──────────────────────────────────
                     elif event.key in (pygame.K_RETURN, pygame.K_SPACE) and self.state == STATE_MOON and self.aegis_dialog_active:
                         line = _AEGIS_BOSS_LINES[self.aegis_dialog_line]
@@ -3380,10 +3401,11 @@ class Game:
                 if self.aegis_dialog_active:
                     self.draw_aegis_dialog()
                 elif self.final_blow_hub_t > 0:
-                    self._draw_victory_overlay()   # fond progressif + texte par-dessus
+                    self._draw_victory_overlay()
                 else:
                     self.draw_boss_ui()
                     self.draw_announce()
+                    self.draw_shield_ability()
             elif self.state == STATE_GAMEOVER:
                 self.draw_world(in_arena=(self.boss is not None))
                 self.draw_gameover()
@@ -3598,6 +3620,12 @@ class Game:
         if self.paused:
             self.draw_pause_menu()
 
+        if self.save_anim_t > 0:
+            self.draw_save_animation()
+            self.save_anim_t += 1
+            if self.save_anim_t > self.SAVE_ANIM_DUR:
+                self.save_anim_t = 0
+
     # ── Menu Pause ───────────────────────────────────────────────────────────
 
     def toggle_pause(self):
@@ -3632,13 +3660,19 @@ class Game:
             surf.blit(ts, (pmx + 45, pmy + 85 + i * 54))
 
     def save_game(self):
-        if not self.ow_player:
-            return
-        data = {"ow_x": self.ow_player.x, "ow_y": self.ow_player.y}
+        data = {
+            "ow_x": self.ow_player.x if self.ow_player else 0,
+            "ow_y": self.ow_player.y if self.ow_player else 0,
+            "bosses_defeated": ["moon"] if self.shield_unlocked else [],
+            "abilities": ["shield"] if self.shield_unlocked else [],
+        }
         path = os.path.join(os.path.expanduser("~"), ".dreamspawn_save.json")
         try:
             with open(path, 'w') as f:
                 json.dump(data, f)
+            self.save_anim_t = 1      # déclenche l'animation DS
+            if self.paused:
+                self.toggle_pause()   # ferme le menu pause
         except Exception:
             pass
 
@@ -3656,6 +3690,7 @@ class Game:
         self.aegis_dialog_char_t  = 0
         if self.aegis_dialog_line >= len(_AEGIS_BOSS_LINES):
             self.aegis_dialog_active = False
+            self.shield_unlocked     = True   # Aegis donne le bouclier
             self.start_overworld()
 
     def update_aegis_dialog(self):
@@ -3742,6 +3777,77 @@ class Game:
             fo.set_alpha(alpha)
             surf.blit(fo, (0, 0))
 
+    # ── Animation sauvegarde style DS ───────────────────────────────────────
+
+    def draw_save_animation(self):
+        surf = self.screen
+        t    = self.save_anim_t
+        DUR  = self.SAVE_ANIM_DUR
+
+        # Fade in/out de l'overlay
+        if t < 20:
+            alpha = int(210 * t / 20)
+        elif t > DUR - 25:
+            alpha = int(210 * (DUR - t) / 25)
+        else:
+            alpha = 210
+        ov = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        ov.fill((0, 0, 12, alpha))
+        surf.blit(ov, (0, 0))
+        if t < 12:
+            return
+
+        ta = min(255, int(255 * (t - 12) / 18))
+        cx, cy = WIDTH // 2, HEIGHT // 2 - 30
+
+        # Étoiles tournantes (style DS)
+        for i in range(8):
+            angle = math.radians(t * 4 + i * 45)
+            r_orb = 38 + int(8 * math.sin(math.radians(t * 7 + i * 55)))
+            ox = cx + int(math.cos(angle) * r_orb)
+            oy = cy + int(math.sin(angle) * r_orb)
+            sz = 3 + int(2 * math.sin(math.radians(t * 9 + i * 40)))
+            gs = pygame.Surface((sz * 2 + 2, sz * 2 + 2), pygame.SRCALPHA)
+            pygame.draw.circle(gs, (255, 225, 110, ta), (sz + 1, sz + 1), sz)
+            surf.blit(gs, (ox - sz - 1, oy - sz - 1))
+
+        # Halo central
+        for r in (32, 22, 13):
+            hg = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+            hg.fill((130, 190, 255, max(0, ta * 60 // 255)))
+            surf.blit(hg, (cx - r, cy - r))
+        pygame.draw.circle(surf, (210, 235, 255), (cx, cy), 10)
+
+        # Texte "SAUVEGARDE..."
+        dots = "." * ((t // 18) % 4)
+        ts = self.font_med.render(f"SAUVEGARDE{dots}", True, (220, 215, 255))
+        ts.set_alpha(ta)
+        surf.blit(ts, ts.get_rect(center=(cx, HEIGHT // 2 + 22)))
+
+        # Hint style DS
+        if t > 45:
+            ha = min(ta, 155)
+            ht = self.font_sm.render("Ne pas éteindre la console.", True, (170, 165, 215))
+            ht.set_alpha(ha)
+            surf.blit(ht, ht.get_rect(center=(cx, HEIGHT // 2 + 66)))
+
+    # ── Bouclier — dessin en combat ──────────────────────────────────────────
+
+    def draw_shield_ability(self):
+        """Anneau de bouclier autour du joueur quand ability_shield_t > 0."""
+        if not self.player or self.ability_shield_t <= 0:
+            return
+        px = self.player.rect.centerx - self.cam[0]
+        py = self.player.rect.centery - self.cam[1]
+        frac = self.ability_shield_t / self.SHIELD_DUR
+        pulse = int(abs(math.sin(self.frame * 0.15)) * 6)
+        r = 36 + pulse
+        alpha = int(180 * frac)
+        ring = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+        pygame.draw.circle(ring, (100, 200, 255, alpha), (r, r), r, 4)
+        pygame.draw.circle(ring, (200, 240, 255, alpha // 2), (r, r), r - 6, 2)
+        self.screen.blit(ring, (px - r, py - r))
+
     def _check_parry(self):
         if not self.boss: return
         for proj in self.projectiles_boss:
@@ -3793,6 +3899,12 @@ class Game:
                            pull_x=pull_x, pull_y=pull_y, pull_force=pull_force)
         if self.god_mode:
             self.player.hp = self.player.max_hp
+        # ── Bouclier compétence ────────────────────────────────────────────
+        if self.ability_shield_t > 0:
+            self.ability_shield_t -= 1
+            self.player.invuln = max(self.player.invuln, self.ability_shield_t)
+        if self.ability_shield_cd > 0:
+            self.ability_shield_cd -= 1
         # Invulnérabilité pendant les animations boss
         if self.boss and (self.boss.pre_dr_active or self.boss.final_blow_active):
             self.player.invuln = max(self.player.invuln, 10)
@@ -4573,6 +4685,54 @@ class Game:
         if self.god_mode:
             gm_s = self.font_sm.render("GOD MODE", True, (100, 255, 120))
             self.screen.blit(gm_s, gm_s.get_rect(topright=(WIDTH - 8, 6)))
+
+        # ── Bouclier HUD (bas-gauche) ─────────────────────────────────────────
+        if self.shield_unlocked:
+            HUD_X = 18
+            HUD_Y = HEIGHT - 62
+            HUD_W = 90
+            HUD_H = 44
+
+            # Fond
+            hud_bg = pygame.Surface((HUD_W, HUD_H), pygame.SRCALPHA)
+            hud_bg.fill((8, 4, 18, 180))
+            self.screen.blit(hud_bg, (HUD_X, HUD_Y))
+            pygame.draw.rect(self.screen, (80, 80, 120), (HUD_X, HUD_Y, HUD_W, HUD_H), 1, border_radius=3)
+
+            # Libellé touche
+            key_col = (255, 255, 255) if self.ability_shield_cd == 0 else (100, 100, 140)
+            k_surf = self.font_sm.render("[1] Bouclier", True, key_col)
+            self.screen.blit(k_surf, (HUD_X + 6, HUD_Y + 5))
+
+            if self.ability_shield_t > 0:
+                # Actif : barre de durée bleue
+                frac_dur = self.ability_shield_t / self.SHIELD_DUR
+                bar_fill = max(1, int((HUD_W - 12) * frac_dur))
+                pygame.draw.rect(self.screen, (20, 20, 40),
+                                 (HUD_X + 6, HUD_Y + 24, HUD_W - 12, 10), border_radius=2)
+                pygame.draw.rect(self.screen, (60, 160, 255),
+                                 (HUD_X + 6, HUD_Y + 24, bar_fill, 10), border_radius=2)
+                active_s = self.font_sm.render("ACTIF", True, (80, 200, 255))
+                self.screen.blit(active_s, active_s.get_rect(midright=(HUD_X + HUD_W - 4, HUD_Y + 29)))
+            elif self.ability_shield_cd > 0:
+                # Recharge : barre grisée qui se remplit
+                frac_cd = 1.0 - self.ability_shield_cd / self.SHIELD_CD
+                bar_fill = max(1, int((HUD_W - 12) * frac_cd))
+                pygame.draw.rect(self.screen, (20, 20, 40),
+                                 (HUD_X + 6, HUD_Y + 24, HUD_W - 12, 10), border_radius=2)
+                pygame.draw.rect(self.screen, (70, 70, 100),
+                                 (HUD_X + 6, HUD_Y + 24, bar_fill, 10), border_radius=2)
+                secs_left = math.ceil(self.ability_shield_cd / 60)
+                cd_s = self.font_sm.render(f"{secs_left}s", True, (130, 130, 170))
+                self.screen.blit(cd_s, cd_s.get_rect(midright=(HUD_X + HUD_W - 4, HUD_Y + 29)))
+            else:
+                # Prêt : barre pleine + texte vert
+                pygame.draw.rect(self.screen, (20, 20, 40),
+                                 (HUD_X + 6, HUD_Y + 24, HUD_W - 12, 10), border_radius=2)
+                pygame.draw.rect(self.screen, (60, 220, 100),
+                                 (HUD_X + 6, HUD_Y + 24, HUD_W - 12, 10), border_radius=2)
+                rdy_s = self.font_sm.render("PRÊT", True, (80, 255, 130))
+                self.screen.blit(rdy_s, rdy_s.get_rect(midright=(HUD_X + HUD_W - 4, HUD_Y + 29)))
 
     def draw_announce(self):
         if self.announce_t <= 0 or not self.announce_text: return
