@@ -206,6 +206,53 @@ def burst(particles, x, y, n=14, color=(255, 255, 255), speed=4.0, life=30, grav
                                   random.randint(int(life * 0.6), life), color, size, grav))
 
 
+def _strip_black_bg(surf, thresh=12):
+    """Rend transparent le fond noir d'un sprite (supprime le carré).
+    Met alpha=0 pour tout pixel dont max(r,g,b) < thresh. Utilise surfarray
+    (numpy) si dispo, sinon retourne la surface inchangée."""
+    try:
+        import numpy as _np
+        surf = surf.convert_alpha()
+        rgb = pygame.surfarray.pixels3d(surf)        # (w,h,3) vue
+        alpha = pygame.surfarray.pixels_alpha(surf)  # (w,h)   vue
+        maxc = rgb.max(axis=2)
+        # Fondu doux : alpha proportionnel à la luminance près du seuil,
+        # coupe nette en dessous → plus de halo noir résiduel.
+        mask = maxc < thresh
+        alpha[mask] = 0
+        del rgb, alpha   # libère les locks surfarray
+        return surf
+    except Exception as e:
+        print(f"[STRIP] fond non retiré: {e}")
+        return surf
+
+
+def _recolor_gradient(surf, lo, hi):
+    """Recolorise un sprite selon sa luminance : ombres→lo, lumières→hi.
+    Conserve tout le détail (au lieu d'aplatir en une couleur unie).
+    Préserve l'alpha. Retourne une nouvelle surface."""
+    try:
+        import numpy as _np
+        src = surf.convert_alpha()
+        rgb = pygame.surfarray.array3d(src).astype(_np.float32)   # (w,h,3)
+        alpha = pygame.surfarray.array_alpha(src)                 # (w,h)
+        lum = (0.30 * rgb[..., 0] + 0.59 * rgb[..., 1] +
+               0.11 * rgb[..., 2]) / 255.0                        # 0..1
+        lum = _np.clip(lum * 1.15, 0.0, 1.0)[..., None]           # léger boost
+        lo_a = _np.array(lo, dtype=_np.float32)
+        hi_a = _np.array(hi, dtype=_np.float32)
+        out = lo_a + (hi_a - lo_a) * lum                          # (w,h,3)
+        res = pygame.Surface(src.get_size(), pygame.SRCALPHA)
+        pygame.surfarray.blit_array(res, out.astype(_np.uint8))
+        a_view = pygame.surfarray.pixels_alpha(res)
+        a_view[:] = alpha
+        del a_view
+        return res
+    except Exception as e:
+        print(f"[RECOLOR] échec: {e}")
+        return surf
+
+
 class DustField:
     def __init__(self, count=50, bounds=(0, 0, WIDTH, HEIGHT)):
         self.bounds = bounds
@@ -2681,8 +2728,10 @@ AEGIS_PHASE_NAMES = {
 }
 # Couleurs par forme
 _AEGIS_COL_LIGHT = (255, 220, 130)   # angélique (or)
-_AEGIS_COL_MIXED = (200, 110, 220)   # transition (violet clair)
-_AEGIS_COL_DARK  = (130, 50, 200)    # vide (violet sombre)
+_AEGIS_COL_MIXED = (225, 110, 210)   # transition (le masque se fissure)
+_AEGIS_COL_DARK  = (235, 40, 165)    # vrai visage : magenta « splat art »
+_AEGIS_COL_DARK2 = (255, 95, 215)    # rose vif — éclats / cœur
+_AEGIS_COL_VOID  = (120, 12, 150)    # violet profond — ombres du vide
 
 
 class AegisBoss:
@@ -2707,6 +2756,9 @@ class AegisBoss:
         self.next_phase = 1
         self.attack_timer = 60
         self.step = 0
+        self.emitter = None        # attaque canalisée en cours (dict) ou None
+        self.spin = 0.0            # angle accumulé pour les spirales
+        self.spin2 = 0.0           # second angle (contre-rotation)
         self.invuln_t = 0
         self.dim = DIM_REAL
         self.dead = False
@@ -2835,262 +2887,358 @@ class AegisBoss:
 
     # ── Dispatch des phases ────────────────────────────────────────────────
     def _update_phase(self, player, beams, projectiles, rings, telegraphs, particles):
-        # Dérive horizontale vers le joueur (toutes phases)
+        # Déplacement : flotte et poursuit le joueur ; plus le vrai visage est
+        # révélé, plus Aegis devient mobile et imprévisible.
         tx = max(self.ax_left + 240, min(self.ax_right - 240, player.rect.centerx))
-        spd = 1.8 + 0.25 * self.phase
-        self._drift_to(tx, self.target_y, spd)
+        spd = 1.5 + 0.5 * self.phase
+        ty = self.target_y + math.sin(self.bob_t * 0.7) * (20 + 4 * self.phase)
+        self._drift_to(tx, ty, spd)
+
+        # Une attaque canalisée (spirale, vagues d'anneaux, balayage) est
+        # prioritaire : elle tire chaque frame jusqu'à épuisement.
+        if self.emitter is not None:
+            self._run_emitter(player, beams, projectiles, rings, telegraphs, particles)
+            return
 
         self.attack_timer -= 1
         if self.attack_timer > 0:
             return
+        getattr(self, f"_phase{self.phase}")(
+            player, beams, projectiles, rings, telegraphs, particles)
 
-        fn = getattr(self, f"_phase{self.phase}")
-        fn(player, beams, projectiles, rings, telegraphs, particles)
+    # ── Émetteur d'attaques canalisées ─────────────────────────────────────
+    def _run_emitter(self, player, beams, projectiles, rings, telegraphs, particles):
+        e = self.emitter
+        e["t"] += 1
+        k = e["kind"]
 
-    # ── PHASE 1 : L'Ange Gardien ───────────────────────────────────────────
+        if k == "spiral":
+            self.spin += e["dspin"]
+            if e["t"] % e["rate"] == 0:
+                for a in range(e["arms"]):
+                    ang = self.spin + a * math.tau / e["arms"]
+                    self._orb(projectiles, self.x, self.y, ang, e["speed"],
+                              e["color"], dmg=e["dmg"], life=e.get("life", 260))
+
+        elif k == "dspiral":
+            self.spin += e["dspin"]; self.spin2 -= e["dspin"]
+            if e["t"] % e["rate"] == 0:
+                for a in range(e["arms"]):
+                    base = a * math.tau / e["arms"]
+                    self._orb(projectiles, self.x, self.y, self.spin + base,
+                              e["speed"], e["color"], dmg=e["dmg"], life=e.get("life", 260))
+                    self._orb(projectiles, self.x, self.y, self.spin2 + base,
+                              e["speed"], e["color2"], dmg=e["dmg"], life=e.get("life", 260))
+
+        elif k == "rings":
+            if e["t"] % e["rate"] == 0:
+                off = e["wave"] * e.get("twist", 0.13)
+                self._ring360(projectiles, e["count"], e["speed"], e["color"],
+                              dmg=e["dmg"], offset=off, life=e.get("life", 240))
+                self.game.add_shake(5, 6)
+                burst(particles, self.x, self.y, 14, e["color"], 5.0, 22, 0.0, 4)
+                e["wave"] += 1
+
+        elif k == "sweep":
+            # Rayon tournant fait de balles rapides : trace un arc mortel.
+            self.spin += e["dspin"]
+            if e["t"] % e["rate"] == 0:
+                for j in range(e.get("dual", 1)):
+                    ang = self.spin + j * math.pi
+                    self._orb(projectiles, self.x, self.y, ang, e["speed"],
+                              e["color"], dmg=e["dmg"], radius=8, life=e.get("life", 200))
+
+        if e["t"] >= e["dur"]:
+            self.emitter = None
+            self.attack_timer = e.get("recover", 40)
+
+    # ── PHASE 1 : L'Ange Gardien (le masque bienveillant) ──────────────────
     def _phase1(self, player, beams, projectiles, rings, telegraphs, particles):
-        seq = ["fan", "meteor", "fan"]
+        seq = ["shotgun", "starfall", "nova", "shotgun"]
         c = seq[self.step % len(seq)]; self.step += 1
-        if c == "fan":
-            self._atk_fan(player, projectiles, telegraphs, count=5, spread=0.9,
-                          speed=4.2, dmg=2, color=_AEGIS_COL_LIGHT)
-            self.attack_timer = 95
-        else:
-            self._atk_rain(player, projectiles, telegraphs, particles, count=4,
-                           dmg=2, color=_AEGIS_COL_LIGHT)
-            self.attack_timer = 105
-
-    # ── PHASE 2 : La Fissure ───────────────────────────────────────────────
-    def _phase2(self, player, beams, projectiles, rings, telegraphs, particles):
-        seq = ["fan2", "beam_v", "rain"]
-        c = seq[self.step % len(seq)]; self.step += 1
-        if c == "fan2":
-            self._atk_fan(player, projectiles, telegraphs, count=7, spread=1.2,
-                          speed=4.6, dmg=2, color=_AEGIS_COL_MIXED)
-            self.attack_timer = 90
-        elif c == "beam_v":
-            self._atk_beam_v(player.rect.centerx, beams, telegraphs, dmg=3, width=90)
-            self.attack_timer = 85
-        else:
-            self._atk_rain(player, projectiles, telegraphs, particles, count=6,
-                           dmg=2, color=_AEGIS_COL_MIXED)
-            self.attack_timer = 95
-
-    # ── PHASE 3 : Le Mensonge Exposé ───────────────────────────────────────
-    def _phase3(self, player, beams, projectiles, rings, telegraphs, particles):
-        seq = ["cross", "rain", "fan", "homing"]
-        c = seq[self.step % len(seq)]; self.step += 1
-        if c == "cross":
-            self._atk_cross(player, beams, telegraphs)
-            self.attack_timer = 95
-        elif c == "rain":
-            self._atk_rain(player, projectiles, telegraphs, particles, count=8,
-                           dmg=2, color=_AEGIS_COL_MIXED)
-            self.attack_timer = 85
-        elif c == "fan":
-            self._atk_fan(player, projectiles, telegraphs, count=9, spread=1.4,
-                          speed=5.0, dmg=2, color=_AEGIS_COL_MIXED)
+        if c == "shotgun":
+            self._atk_shotgun(player, projectiles, telegraphs, n=5, spread=0.55,
+                              speed=6.0, dmg=2, color=_AEGIS_COL_LIGHT)
             self.attack_timer = 80
+        elif c == "starfall":
+            self._atk_starfall(player, projectiles, telegraphs, particles,
+                               count=9, dmg=2, gap=280, color=_AEGIS_COL_LIGHT)
+            self.attack_timer = 95
         else:
-            self._atk_homing(player, projectiles, n=3, dmg=2)
+            self._atk_nova(rings, telegraphs, particles, dmg=2, color=_AEGIS_COL_LIGHT)
             self.attack_timer = 100
 
-    # ── PHASE 4 : Le Vide Révélé ───────────────────────────────────────────
-    def _phase4(self, player, beams, projectiles, rings, telegraphs, particles):
-        seq = ["nova", "rain", "cross", "fan"]
+    # ── PHASE 2 : La Fissure (la première spirale traverse le masque) ──────
+    def _phase2(self, player, beams, projectiles, rings, telegraphs, particles):
+        seq = ["spiral", "wall", "shotgun", "starfall"]
         c = seq[self.step % len(seq)]; self.step += 1
-        if c == "nova":
-            self._atk_nova(rings, telegraphs, particles, dmg=3)
-            self.attack_timer = 120
-        elif c == "rain":
-            self._atk_rain(player, projectiles, telegraphs, particles, count=10,
-                           dmg=2, color=_AEGIS_COL_DARK)
-            self.attack_timer = 80
-        elif c == "cross":
-            self._atk_cross(player, beams, telegraphs)
+        if c == "spiral":
+            self.emitter = dict(kind="spiral", t=0, dur=150, rate=6, arms=2,
+                                dspin=0.13, speed=4.4, color=_AEGIS_COL_LIGHT,
+                                dmg=2, recover=45)
+        elif c == "wall":
+            self._atk_wall(player, beams, telegraphs, particles,
+                           n_gaps=2, gap_w=210, dmg=3)
             self.attack_timer = 85
+        elif c == "shotgun":
+            self._atk_shotgun(player, projectiles, telegraphs, n=7, spread=0.7,
+                              speed=6.5, dmg=2, color=_AEGIS_COL_MIXED)
+            self.attack_timer = 70
         else:
-            self._atk_fan(player, projectiles, telegraphs, count=11, spread=1.6,
-                          speed=5.2, dmg=2, color=_AEGIS_COL_DARK)
+            self._atk_starfall(player, projectiles, telegraphs, particles,
+                               count=12, dmg=2, gap=240, color=_AEGIS_COL_MIXED)
+            self.attack_timer = 80
+
+    # ── PHASE 3 : Le Mensonge Exposé (double spirale inversée) ─────────────
+    def _phase3(self, player, beams, projectiles, rings, telegraphs, particles):
+        seq = ["dspiral", "starfall", "swarm", "shotgun", "wall"]
+        c = seq[self.step % len(seq)]; self.step += 1
+        if c == "dspiral":
+            self.emitter = dict(kind="dspiral", t=0, dur=170, rate=6, arms=2,
+                                dspin=0.16, speed=4.8, color=_AEGIS_COL_MIXED,
+                                color2=_AEGIS_COL_DARK2, dmg=2, recover=42)
+        elif c == "starfall":
+            self._atk_starfall(player, projectiles, telegraphs, particles,
+                               count=15, dmg=2, gap=220, color=_AEGIS_COL_MIXED)
+            self.attack_timer = 72
+        elif c == "swarm":
+            self._atk_swarm(player, projectiles, n=4, dmg=2, homing=0.11,
+                            color=_AEGIS_COL_DARK2)
+            self.attack_timer = 80
+        elif c == "shotgun":
+            self._atk_shotgun(player, projectiles, telegraphs, n=9, spread=0.85,
+                              speed=7.0, dmg=2, color=_AEGIS_COL_MIXED)
+            self.attack_timer = 66
+        else:
+            self._atk_wall(player, beams, telegraphs, particles,
+                           n_gaps=2, gap_w=185, dmg=3)
             self.attack_timer = 78
 
-    # ── PHASE 5 : L'Héritage Volé (pouvoirs des boss) ──────────────────────
-    def _phase5(self, player, beams, projectiles, rings, telegraphs, particles):
-        seq = ["crescents", "rain_dense", "nova", "cross"]
+    # ── PHASE 4 : Le Vide Révélé (vrai visage — enfer de balles) ───────────
+    def _phase4(self, player, beams, projectiles, rings, telegraphs, particles):
+        seq = ["rings", "wall", "starfall", "spiral", "shotgun"]
         c = seq[self.step % len(seq)]; self.step += 1
-        if c == "crescents":
-            self._atk_crescents(player, projectiles, telegraphs, n=6)
-            self.attack_timer = 90
-        elif c == "rain_dense":
-            self._atk_rain(player, projectiles, telegraphs, particles, count=14,
-                           dmg=2, color=(255, 160, 80))
-            self.attack_timer = 75
-        elif c == "nova":
-            self._atk_nova(rings, telegraphs, particles, dmg=3)
-            self.attack_timer = 110
+        if c == "rings":
+            self.emitter = dict(kind="rings", t=0, dur=180, rate=24, wave=0,
+                                count=22, speed=4.0, twist=0.14,
+                                color=_AEGIS_COL_DARK, dmg=2, recover=34)
+        elif c == "wall":
+            self._atk_wall(player, beams, telegraphs, particles,
+                           n_gaps=2, gap_w=170, dmg=3)
+            self.attack_timer = 70
+        elif c == "starfall":
+            self._atk_starfall(player, projectiles, telegraphs, particles,
+                               count=19, dmg=2, gap=200, color=_AEGIS_COL_DARK)
+            self.attack_timer = 64
+        elif c == "spiral":
+            self.emitter = dict(kind="spiral", t=0, dur=160, rate=5, arms=3,
+                                dspin=0.18, speed=5.0, color=_AEGIS_COL_DARK,
+                                dmg=2, recover=34)
         else:
-            self._atk_cross(player, beams, telegraphs)
-            self.attack_timer = 80
+            self._atk_shotgun(player, projectiles, telegraphs, n=9, spread=0.9,
+                              speed=7.2, dmg=2, color=_AEGIS_COL_DARK2)
+            self.attack_timer = 60
+
+    # ── PHASE 5 : L'Héritage Volé (combos de pouvoirs dérobés) ─────────────
+    def _phase5(self, player, beams, projectiles, rings, telegraphs, particles):
+        seq = ["combo_ws", "rings", "combo_rs", "shotgun", "swarm", "wall"]
+        c = seq[self.step % len(seq)]; self.step += 1
+        if c == "combo_ws":
+            # Mur à franchir PENDANT une spirale.
+            self._atk_wall(player, beams, telegraphs, particles,
+                           n_gaps=2, gap_w=185, dmg=3, dur=80)
+            self.emitter = dict(kind="spiral", t=0, dur=150, rate=6, arms=3,
+                                dspin=0.17, speed=4.6, color=_AEGIS_COL_DARK,
+                                dmg=2, recover=34)
+        elif c == "rings":
+            self.emitter = dict(kind="rings", t=0, dur=190, rate=22, wave=0,
+                                count=24, speed=4.2, twist=0.16,
+                                color=_AEGIS_COL_DARK, dmg=2, recover=32)
+        elif c == "combo_rs":
+            # Pluie d'étoiles PENDANT une double spirale.
+            self._atk_starfall(player, projectiles, telegraphs, particles,
+                               count=16, dmg=2, gap=210, color=_AEGIS_COL_DARK2)
+            self.emitter = dict(kind="dspiral", t=0, dur=150, rate=7, arms=2,
+                                dspin=0.18, speed=4.8, color=_AEGIS_COL_DARK,
+                                color2=_AEGIS_COL_DARK2, dmg=2, recover=32)
+        elif c == "shotgun":
+            self._atk_shotgun(player, projectiles, telegraphs, n=11, spread=1.0,
+                              speed=7.4, dmg=2, color=_AEGIS_COL_DARK2)
+            self.attack_timer = 56
+        elif c == "swarm":
+            self._atk_swarm(player, projectiles, n=6, dmg=2, homing=0.13,
+                            color=_AEGIS_COL_DARK2)
+            self.attack_timer = 66
+        else:
+            self._atk_wall(player, beams, telegraphs, particles,
+                           n_gaps=1, gap_w=200, dmg=3)
+            self.attack_timer = 60
 
     # ── PHASE 6 : Dernier Recours (aspiration + frénésie) ──────────────────
     def _phase6(self, player, beams, projectiles, rings, telegraphs, particles):
-        seq = ["fan", "rain", "homing", "nova", "crescents"]
+        seq = ["sweep", "combo_ws", "rings", "dspiral", "starfall", "swarm"]
         c = seq[self.step % len(seq)]; self.step += 1
-        if c == "fan":
-            self._atk_fan(player, projectiles, telegraphs, count=13, spread=1.8,
-                          speed=5.6, dmg=2, color=_AEGIS_COL_DARK)
-            self.attack_timer = 62
-        elif c == "rain":
-            self._atk_rain(player, projectiles, telegraphs, particles, count=12,
-                           dmg=2, color=_AEGIS_COL_DARK)
-            self.attack_timer = 60
-        elif c == "homing":
-            self._atk_homing(player, projectiles, n=4, dmg=2)
-            self.attack_timer = 70
-        elif c == "nova":
-            self._atk_nova(rings, telegraphs, particles, dmg=3)
-            self.attack_timer = 95
+        if c == "sweep":
+            self.emitter = dict(kind="sweep", t=0, dur=170, rate=2, dual=2,
+                                dspin=0.085, speed=8.0, color=_AEGIS_COL_DARK2,
+                                dmg=2, recover=30)
+        elif c == "combo_ws":
+            self._atk_wall(player, beams, telegraphs, particles,
+                           n_gaps=2, gap_w=170, dmg=3, dur=72)
+            self.emitter = dict(kind="spiral", t=0, dur=150, rate=5, arms=3,
+                                dspin=0.2, speed=5.0, color=_AEGIS_COL_DARK,
+                                dmg=2, recover=28)
+        elif c == "rings":
+            self.emitter = dict(kind="rings", t=0, dur=190, rate=20, wave=0,
+                                count=26, speed=4.4, twist=0.17,
+                                color=_AEGIS_COL_DARK, dmg=2, recover=28)
+        elif c == "dspiral":
+            self.emitter = dict(kind="dspiral", t=0, dur=170, rate=6, arms=3,
+                                dspin=0.19, speed=5.0, color=_AEGIS_COL_DARK,
+                                color2=_AEGIS_COL_DARK2, dmg=2, recover=28)
+        elif c == "starfall":
+            self._atk_starfall(player, projectiles, telegraphs, particles,
+                               count=22, dmg=2, gap=185, color=_AEGIS_COL_DARK)
+            self.attack_timer = 52
         else:
-            self._atk_crescents(player, projectiles, telegraphs, n=8)
-            self.attack_timer = 65
-
-    # ── PHASE 7 : Le Néant Absolu ──────────────────────────────────────────
-    def _phase7(self, player, beams, projectiles, rings, telegraphs, particles):
-        seq = ["halfscreen", "rain", "cross", "nova", "fan"]
-        c = seq[self.step % len(seq)]; self.step += 1
-        if c == "halfscreen":
-            self._atk_halfscreen(beams, telegraphs, particles)
-            self.attack_timer = 120
-        elif c == "rain":
-            self._atk_rain(player, projectiles, telegraphs, particles, count=14,
-                           dmg=2, color=(180, 60, 220))
+            self._atk_swarm(player, projectiles, n=7, dmg=2, homing=0.14,
+                            color=_AEGIS_COL_DARK2)
             self.attack_timer = 58
-        elif c == "cross":
-            self._atk_cross(player, beams, telegraphs)
-            self.attack_timer = 70
-        elif c == "nova":
-            self._atk_nova(rings, telegraphs, particles, dmg=3)
-            self.attack_timer = 90
+
+    # ── PHASE 7 : Le Néant Absolu (marathon final — quasi impossible) ──────
+    def _phase7(self, player, beams, projectiles, rings, telegraphs, particles):
+        seq = ["collapse", "sweep2", "combo_full", "rings", "starfall", "shotgun"]
+        c = seq[self.step % len(seq)]; self.step += 1
+        if c == "collapse":
+            # Le Néant : anneaux 360° très denses + mur simultané.
+            self._atk_wall(player, beams, telegraphs, particles,
+                           n_gaps=2, gap_w=165, dmg=3, dur=70)
+            self.emitter = dict(kind="rings", t=0, dur=200, rate=16, wave=0,
+                                count=30, speed=4.6, twist=0.2,
+                                color=_AEGIS_COL_DARK, dmg=2, recover=24)
+        elif c == "sweep2":
+            self.emitter = dict(kind="sweep", t=0, dur=190, rate=2, dual=3,
+                                dspin=0.1, speed=8.5, color=_AEGIS_COL_DARK2,
+                                dmg=2, recover=24)
+        elif c == "combo_full":
+            # Pluie d'étoiles + double spirale + nova : saturation totale.
+            self._atk_starfall(player, projectiles, telegraphs, particles,
+                               count=20, dmg=2, gap=180, color=_AEGIS_COL_DARK2)
+            self._atk_nova(rings, telegraphs, particles, dmg=3, color=_AEGIS_COL_DARK)
+            self.emitter = dict(kind="dspiral", t=0, dur=160, rate=6, arms=3,
+                                dspin=0.21, speed=5.2, color=_AEGIS_COL_DARK,
+                                color2=_AEGIS_COL_DARK2, dmg=2, recover=24)
+        elif c == "rings":
+            self.emitter = dict(kind="rings", t=0, dur=190, rate=15, wave=0,
+                                count=30, speed=4.8, twist=0.22,
+                                color=_AEGIS_COL_DARK, dmg=2, recover=22)
+        elif c == "starfall":
+            self._atk_starfall(player, projectiles, telegraphs, particles,
+                               count=26, dmg=2, gap=165, color=_AEGIS_COL_DARK)
+            self.attack_timer = 46
         else:
-            self._atk_fan(player, projectiles, telegraphs, count=15, spread=2.0,
-                          speed=6.0, dmg=2, color=(180, 60, 220))
-            self.attack_timer = 60
+            self._atk_shotgun(player, projectiles, telegraphs, n=13, spread=1.1,
+                              speed=7.8, dmg=2, color=_AEGIS_COL_DARK2)
+            self.attack_timer = 44
 
     # ── Briques d'attaque (basées sur les primitives globales) ─────────────
-    def _atk_fan(self, player, projectiles, telegraphs, count, spread, speed, dmg, color):
+    def _orb(self, projectiles, x, y, ang, speed, color, dmg=2, radius=9,
+             life=260, homing=0.0, target=None, kind="orb"):
+        projectiles.append(BossProjectile(
+            x, y, math.cos(ang) * speed, math.sin(ang) * speed, DIM_REAL,
+            radius=radius, life=life, homing=homing, target=target,
+            color=color, kind=kind, dmg=dmg, hits_any_dim=True))
+
+    def _ring360(self, projectiles, count, speed, color, dmg=2, offset=0.0,
+                 radius=9, life=240):
+        for i in range(count):
+            ang = offset + i * math.tau / count
+            self._orb(projectiles, self.x, self.y, ang, speed, color,
+                      dmg=dmg, radius=radius, life=life)
+
+    def _atk_shotgun(self, player, projectiles, telegraphs, n, spread, speed,
+                     dmg, color):
         ox, oy = self.x, self.y
         ang = math.atan2(player.rect.centery - oy, player.rect.centerx - ox)
         def fire():
-            for i in range(count):
-                tt = i / (count - 1) if count > 1 else 0.5
-                a = ang - spread / 2 + spread * tt
-                projectiles.append(BossProjectile(
-                    ox, oy, math.cos(a) * speed, math.sin(a) * speed, DIM_REAL,
-                    radius=11, life=240, color=color, kind="orb", dmg=dmg,
-                    hits_any_dim=True))
-        telegraphs.append(Telegraph("fan", 55, DIM_REAL, on_fire=fire, color=color,
+            for i in range(n):
+                tt = (i / (n - 1) - 0.5) if n > 1 else 0.0
+                self._orb(projectiles, ox, oy, ang + tt * spread, speed, color,
+                          dmg=dmg, radius=9, life=270)
+        telegraphs.append(Telegraph("fan", 50, DIM_REAL, on_fire=fire, color=color,
                                     x=ox, y=oy, angle=ang, spread=spread,
-                                    count=count, length=700, hits_any_dim=True))
+                                    count=n, length=750, hits_any_dim=True))
 
-    def _atk_rain(self, player, projectiles, telegraphs, particles, count, dmg, color):
-        xs = [random.randint(self.ax_left + 120, self.ax_right - 120) for _ in range(count)]
-        # un projectile vise toujours le joueur
-        xs[0] = player.rect.centerx
-        for x in xs:
+    def _atk_starfall(self, player, projectiles, telegraphs, particles, count,
+                      dmg, gap, color):
+        """Pluie verticale couvrant l'arène, sauf une colonne refuge (mobile)."""
+        left = self.ax_left; right = self.ax_right
+        span = right - left
+        safe = random.randint(left + gap, right - gap)
+        for i in range(count):
+            x = int(left + span * (i + 0.5) / count) + random.randint(-18, 18)
+            if abs(x - safe) < gap:
+                continue
             def fire(px=x):
-                projectiles.append(BossProjectile(
-                    px, self.ay_top + 40, 0, 6.5, DIM_REAL, radius=10, life=260,
-                    color=color, kind="orb", dmg=dmg, hits_any_dim=True))
-            telegraphs.append(Telegraph("beam_v", 60, DIM_REAL, on_fire=fire,
+                self._orb(projectiles, px, self.ay_top + 30, math.pi / 2, 7.4,
+                          color, dmg=dmg, radius=10, life=240)
+            telegraphs.append(Telegraph("beam_v", 54, DIM_REAL, on_fire=fire,
                                         color=color, x=x, top=self.ay_top,
-                                        bottom=self.ay_bottom, final_width=22,
+                                        bottom=self.ay_bottom, final_width=16,
                                         hits_any_dim=True))
 
-    def _atk_beam_v(self, x, beams, telegraphs, dmg, width):
-        def fire():
-            rect = pygame.Rect(x - width // 2, self.ay_top, width,
-                               self.ay_bottom - self.ay_top + 400)
-            beams.append(Beam(rect, DIM_REAL, life=40, dmg=dmg,
-                              color=self._form_color(), hits_any_dim=True))
-            self.game.add_shake(14, 22)
-        telegraphs.append(Telegraph("beam_v", 80, DIM_REAL, on_fire=fire,
-                                    color=self._form_color(), x=x, top=self.ay_top,
-                                    bottom=self.ay_bottom + 400, final_width=width,
+    def _atk_wall(self, player, beams, telegraphs, particles, n_gaps=2,
+                  gap_w=180, dmg=3, dur=70):
+        """Murs verticaux mortels traversant l'arène, perforés de fentes sûres."""
+        left = self.ax_left; right = self.ax_right
+        gaps = [max(left + gap_w, min(right - gap_w, player.rect.centerx))]
+        for _ in range(max(0, n_gaps - 1)):
+            gaps.append(random.randint(left + gap_w, right - gap_w))
+        gaps.sort()
+        intervals = []   # régions mortelles (complément des fentes)
+        cursor = left
+        for g in gaps:
+            g0, g1 = g - gap_w, g + gap_w
+            if g0 > cursor:
+                intervals.append((cursor, g0))
+            cursor = max(cursor, g1)
+        if cursor < right:
+            intervals.append((cursor, right))
+        col = _AEGIS_COL_DARK
+        for (x0, x1) in intervals:
+            w = max(8, x1 - x0); cxg = (x0 + x1) / 2
+            def fire(xx=x0, ww=w):
+                rect = pygame.Rect(int(xx), self.ay_top, int(ww),
+                                   self.ay_bottom - self.ay_top + 400)
+                beams.append(Beam(rect, DIM_REAL, life=36, dmg=dmg, color=col,
+                                  hits_any_dim=True))
+            telegraphs.append(Telegraph("beam_v", dur, DIM_REAL, on_fire=fire,
+                                        color=col, x=cxg, top=self.ay_top,
+                                        bottom=self.ay_bottom + 400,
+                                        final_width=w, hits_any_dim=True))
+        def shake():
+            self.game.add_shake(16, 24)
+        telegraphs.append(Telegraph("circle", dur, DIM_REAL, on_fire=shake,
+                                    color=col, x=self.x, y=self.y, r=1,
                                     hits_any_dim=True))
 
-    def _atk_beam_h(self, y, beams, telegraphs, dmg, height):
-        def fire():
-            rect = pygame.Rect(self.ax_left, y - height // 2,
-                               self.ax_right - self.ax_left, height)
-            beams.append(Beam(rect, DIM_REAL, life=40, dmg=dmg,
-                              color=self._form_color(), hits_any_dim=True))
-            self.game.add_shake(14, 22)
-        telegraphs.append(Telegraph("beam_h", 80, DIM_REAL, on_fire=fire,
-                                    color=self._form_color(), y=y, left=self.ax_left,
-                                    right=self.ax_right, final_height=height,
-                                    hits_any_dim=True))
-
-    def _atk_cross(self, player, beams, telegraphs):
-        self._atk_beam_v(player.rect.centerx, beams, telegraphs, dmg=3, width=80)
-        self._atk_beam_h(player.rect.centery, beams, telegraphs, dmg=3, height=70)
-
-    def _atk_nova(self, rings, telegraphs, particles, dmg):
+    def _atk_nova(self, rings, telegraphs, particles, dmg, color=None):
+        col = color or self._form_color()
         cx, cy = self.x, self.y
         def fire():
-            rings.append(Ring(cx, cy, DIM_REAL, max_r=520, life=70,
-                              color=self._form_color(), dmg=dmg, hits_any_dim=True))
-            burst(particles, cx, cy, 50, self._form_color(), 9.0, 45, 0.0, 5)
+            rings.append(Ring(cx, cy, DIM_REAL, max_r=560, life=70, color=col,
+                              dmg=dmg, hits_any_dim=True))
+            burst(particles, cx, cy, 50, col, 9.0, 45, 0.0, 5)
             self.game.add_shake(16, 26)
-        telegraphs.append(Telegraph("ring", 85, DIM_REAL, on_fire=fire,
-                                    color=self._form_color(), x=cx, y=cy, r=520,
-                                    hits_any_dim=True))
+        telegraphs.append(Telegraph("ring", 80, DIM_REAL, on_fire=fire, color=col,
+                                    x=cx, y=cy, r=560, hits_any_dim=True))
 
-    def _atk_homing(self, player, projectiles, n, dmg):
+    def _atk_swarm(self, player, projectiles, n, dmg, homing=0.12, color=None):
+        col = color or self._form_color()
         for i in range(n):
             a = random.uniform(0, math.tau)
-            projectiles.append(BossProjectile(
-                self.x, self.y, math.cos(a) * 2.5, math.sin(a) * 2.5, DIM_REAL,
-                radius=10, life=300, homing=0.10, target=player,
-                color=self._form_color(), kind="orb", dmg=dmg, hits_any_dim=True))
-
-    def _atk_crescents(self, player, projectiles, telegraphs, n):
-        ox, oy = self.x, self.y
-        ang0 = math.atan2(player.rect.centery - oy, player.rect.centerx - ox)
-        def fire():
-            for i in range(n):
-                a = ang0 + (i - n / 2) * 0.22
-                projectiles.append(BossProjectile(
-                    ox, oy, math.cos(a) * 5.0, math.sin(a) * 5.0, DIM_REAL,
-                    radius=14, life=240, color=Pal.MOON_CRESC_R, kind="crescent",
-                    dmg=2, hits_any_dim=True))
-        telegraphs.append(Telegraph("fan", 50, DIM_REAL, on_fire=fire,
-                                    color=Pal.MOON_CRESC_R, x=ox, y=oy, angle=ang0,
-                                    spread=(n * 0.22), count=n, length=600,
-                                    hits_any_dim=True))
-
-    def _atk_halfscreen(self, beams, telegraphs, particles):
-        """Effacement : une moitié de l'arène devient zone de mort."""
-        left_half = random.random() < 0.5
-        mid = (self.ax_left + self.ax_right) // 2
-        if left_half:
-            x0, x1 = self.ax_left, mid
-        else:
-            x0, x1 = mid, self.ax_right
-        cx = (x0 + x1) // 2
-        width = x1 - x0
-        def fire():
-            rect = pygame.Rect(x0, self.ay_top, width,
-                               self.ay_bottom - self.ay_top + 400)
-            beams.append(Beam(rect, DIM_REAL, life=55, dmg=4,
-                              color=(140, 20, 200), hits_any_dim=True))
-            self.game.add_shake(20, 35)
-            for _ in range(30):
-                burst(particles, random.randint(x0, x1),
-                      random.randint(0, HEIGHT), 6, (140, 20, 200), 5.0, 40, 0.0, 5)
-        telegraphs.append(Telegraph("beam_v", 110, DIM_REAL, on_fire=fire,
-                                    color=(160, 30, 220), x=cx, top=self.ay_top,
-                                    bottom=self.ay_bottom + 400, final_width=width,
-                                    hits_any_dim=True))
+            self._orb(projectiles, self.x, self.y, a, 2.6, col, dmg=dmg,
+                      radius=9, life=330, homing=homing, target=player)
 
     # ── Interface combat ───────────────────────────────────────────────────
     def display_bar_fraction(self):
@@ -3129,9 +3277,12 @@ class AegisBoss:
         return [_T(self.rect)]
 
     def get_pull(self):
-        # Phase 6+ : Aegis aspire le joueur vers lui (Aspiration)
-        if self.state == "fighting" and self.phase >= 6:
-            return (self.x, self.y, 0.10)
+        # Phase 6 : aspiration ; phase 7 : aspiration renforcée (Le Néant)
+        if self.state == "fighting":
+            if self.phase == 7:
+                return (self.x, self.y, 0.16)
+            if self.phase == 6:
+                return (self.x, self.y, 0.11)
         return (None, None, 0.0)
 
     def parry_hit(self, particles):
@@ -3141,6 +3292,18 @@ class AegisBoss:
         burst(particles, self.x, self.y, 18, self._form_color(), 6.0, 40, 0.0, 4)
 
     # ── Rendu ──────────────────────────────────────────────────────────────
+    def _draw_spiky_halo(self, surf, cx, cy, col, scale=1.0):
+        """Couronne d'épines (le « soleil » du splat art) derrière Aegis."""
+        n = 16
+        base = self.vis * 0.95 * scale
+        for i in range(n):
+            a = self.bob_t * 0.25 + i * math.tau / n
+            spk = base * (1.25 + 0.18 * math.sin(self.bob_t * 2 + i))
+            x2 = cx + math.cos(a) * spk
+            y2 = cy + math.sin(a) * spk
+            w = max(2, int(7 * scale))
+            pygame.draw.line(surf, col, (cx, cy), (int(x2), int(y2)), w)
+
     def draw(self, surf, cam, current_dim):
         if self.dead and self.death_t > 90:
             return
@@ -3148,16 +3311,38 @@ class AegisBoss:
         cy = int(self.y + self.float_offset - cam[1])
         form = self._form()
         glow_col = self._form_color()
-
-        # Halo
         vis = self.vis
-        gs = pygame.Surface((vis * 2, vis * 2), pygame.SRCALPHA)
         pulse = 0.75 + 0.25 * math.sin(self.bob_t * 1.5)
-        pygame.draw.circle(gs, (*glow_col, int(55 * pulse)), (vis, vis), vis)
-        pygame.draw.circle(gs, (*glow_col, int(85 * pulse)), (vis, vis), int(vis * 0.65))
-        surf.blit(gs, (cx - vis, cy - vis))
 
-        sheet = getattr(self.game, '_aegis_sheet', None)
+        # ── Couronne d'épines (formes mixed/dark : le masque tombe) ──────────
+        if form != 'light':
+            halo_surf = pygame.Surface((vis * 4, vis * 4), pygame.SRCALPHA)
+            spike_col = (*_AEGIS_COL_DARK2, int(60 * pulse))
+            self._draw_spiky_halo(halo_surf, vis * 2, vis * 2, spike_col,
+                                  scale=1.0 if form == 'dark' else 0.7)
+            surf.blit(halo_surf, (cx - vis * 2, cy - vis * 2),
+                      special_flags=pygame.BLEND_RGBA_ADD)
+
+        # ── Halo radial doux (dégradé additif → vraie lueur, pas de disque) ──
+        gs = pygame.Surface((vis * 2, vis * 2), pygame.SRCALPHA)
+        steps = 9
+        for k in range(steps):
+            rr = int(vis * (1 - k / steps))
+            if rr <= 0: continue
+            aa = int((10 + 7 * k) * pulse)
+            pygame.draw.circle(gs, (*glow_col, aa), (vis, vis), rr)
+        surf.blit(gs, (cx - vis, cy - vis), special_flags=pygame.BLEND_RGBA_ADD)
+
+        # Choix de la planche recolorisée selon la forme
+        if form == 'dark':
+            sheet = getattr(self.game, '_aegis_sheet_dark', None) \
+                    or getattr(self.game, '_aegis_sheet', None)
+        elif form == 'mixed':
+            sheet = getattr(self.game, '_aegis_sheet_mixed', None) \
+                    or getattr(self.game, '_aegis_sheet', None)
+        else:
+            sheet = getattr(self.game, '_aegis_sheet', None)
+
         if sheet:
             fw = getattr(self.game, '_aegis_frame_w', sheet.get_height())
             nframes = max(1, sheet.get_width() // fw)
@@ -3166,25 +3351,19 @@ class AegisBoss:
                 frame = sheet.subsurface((fi * fw, 0, fw, sheet.get_height()))
             except Exception:
                 frame = sheet.subsurface((0, 0, fw, sheet.get_height()))
+            # Léger tremblement quand le vrai visage est révélé
+            jit = int(math.sin(self._anim_t * 1.7) * 2) if form == 'dark' else 0
             scaled = pygame.transform.scale(frame, (vis * 2, vis * 2)).copy()
-            # Teinte selon la forme
-            if form == 'dark':
-                tint = pygame.Surface(scaled.get_size(), pygame.SRCALPHA)
-                tint.fill((70, 20, 110, 255))
-                scaled.blit(tint, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-            elif form == 'mixed':
-                tint = pygame.Surface(scaled.get_size(), pygame.SRCALPHA)
-                tint.fill((180, 120, 190, 255))
-                scaled.blit(tint, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+
             # Flash blanc quand touché
             if self.hit_flash > 0:
                 wf = pygame.Surface(scaled.get_size(), pygame.SRCALPHA)
-                wf.fill((255, 255, 255, 110))
+                wf.fill((255, 255, 255, 120))
                 scaled.blit(wf, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
             # Dissolution en mourant
             if self.dead:
                 scaled.set_alpha(max(0, 255 - int(self.death_t * 3)))
-            surf.blit(scaled, (cx - vis, cy - vis))
+            surf.blit(scaled, (cx - vis + jit, cy - vis))
         else:
             pygame.draw.circle(surf, glow_col, (cx, cy), self.radius)
             pygame.draw.circle(surf, (255, 255, 255), (cx, cy), self.radius, 3)
@@ -3576,11 +3755,19 @@ class Game:
             _root_dir = getattr(sys, '_MEIPASS', os.path.dirname(_src_dir))
             _aegis_path = os.path.join(_root_dir, "assets", "images", "aegis_final.png")
             _raw  = pygame.image.load(_aegis_path).convert_alpha()
+            _raw  = _strip_black_bg(_raw)   # supprime le fond noir (carré moche)
             self._aegis_sheet   = _raw
             self._aegis_frame_w = _raw.get_height()   # frames carrés (240px)
+            # Variantes recolorisées (préservent le détail du sprite) :
+            #  - mixed : le masque doré se fissure de magenta
+            #  - dark  : vrai visage « splat art » violet→rose vif
+            self._aegis_sheet_mixed = _recolor_gradient(_raw, (70, 25, 70), (255, 150, 90))
+            self._aegis_sheet_dark  = _recolor_gradient(_raw, (35, 4, 55), (255, 95, 215))
         except Exception as e:
             print(f"[AEGIS] ERREUR chargement: {e}")
             self._aegis_sheet = None
+            self._aegis_sheet_mixed = None
+            self._aegis_sheet_dark = None
 
         # Slot UI Soulslike (Abyss theme — extrait depuis ui_slot.png)
         self._ui_slot = None
