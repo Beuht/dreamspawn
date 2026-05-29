@@ -679,6 +679,148 @@ class Telegraph:
 
 
 # ---------------------------------------------------------------------------
+# Hazards signature d'Aegis : laser rotatif & invocations du Vide
+# ---------------------------------------------------------------------------
+
+class RotLaser:
+    """Rayon mortel rotatif ancré sur Aegis — les « aiguilles d'horloge ».
+    Pendant `warmup` il n'est qu'un fin trait d'alerte (non létal) ; ensuite il
+    devient un faisceau épais et létal qui balaie l'arène. Le test de collision
+    est un vrai point-vers-segment (pas une AABB)."""
+    def __init__(self, boss, angle, omega, length=1700, width=46, dmg=3,
+                 life=300, warmup=46, color=(235, 40, 165)):
+        self.boss = boss
+        self.angle = angle
+        self.omega = omega
+        self.length = length
+        self.width = width
+        self.dmg = dmg
+        self.life = life
+        self.max_life = max(1, life)
+        self.warmup = warmup
+        self.max_warmup = max(1, warmup)
+        self.color = color
+        self.dead = False
+        self.went_live = False
+
+    @property
+    def live(self):
+        return self.warmup <= 0
+
+    def _origin(self):
+        return (self.boss.x, self.boss.y + self.boss.float_offset)
+
+    def update(self):
+        self.angle += self.omega
+        if self.warmup > 0:
+            self.warmup -= 1
+            return
+        self.life -= 1
+        if self.life <= 0:
+            self.dead = True
+
+    def hits(self, target_rect):
+        if not self.live:
+            return False
+        ox, oy = self._origin()
+        cx, cy = target_rect.center
+        dx, dy = math.cos(self.angle), math.sin(self.angle)
+        proj = (cx - ox) * dx + (cy - oy) * dy
+        if proj < 0 or proj > self.length:
+            return False
+        px = ox + dx * proj; py = oy + dy * proj
+        # collision un peu plus étroite que le halo dessiné : on peut frôler le bord
+        return math.hypot(cx - px, cy - py) < self.width * 0.42
+
+    def draw(self, surf, cam):
+        ox, oy = self._origin()
+        ox -= cam[0]; oy -= cam[1]
+        dx, dy = math.cos(self.angle), math.sin(self.angle)
+        ex = ox + dx * self.length
+        ey = oy + dy * self.length
+        ws = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        if not self.live:
+            # ── Télégraphe : trait fin qui s'épaissit et pulse ──
+            t = 1.0 - self.warmup / self.max_warmup
+            a = int(60 + 130 * t)
+            w = max(1, int(2 + 5 * t))
+            pygame.draw.line(ws, (*self.color, a), (int(ox), int(oy)),
+                             (int(ex), int(ey)), w)
+            pygame.draw.line(ws, (255, 250, 255, int(90 * t)),
+                             (int(ox), int(oy)), (int(ex), int(ey)), max(1, w // 2))
+        else:
+            # ── Faisceau létal : halo large multicouche + cœur blanc ──
+            fade = max(0.30, min(1.0, self.life / 16.0))
+            px, py = -dy, dx
+            # le bord externe (frac 1.0) couvre la zone létale → assez visible
+            for frac, alpha in ((1.0, 90), (0.62, 150), (0.32, 210)):
+                hw = self.width * 0.5 * frac
+                poly = [(ox + px * hw, oy + py * hw),
+                        (ex + px * hw, ey + py * hw),
+                        (ex - px * hw, ey - py * hw),
+                        (ox - px * hw, oy - py * hw)]
+                pygame.draw.polygon(ws, (*self.color, int(alpha * fade)), poly)
+            pygame.draw.line(ws, (255, 250, 255, int(235 * fade)),
+                             (int(ox), int(oy)), (int(ex), int(ey)),
+                             max(2, int(self.width * 0.13)))
+        surf.blit(ws, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+
+
+class VoidSpawn:
+    """Petit « œil » du Vide en orbite autour d'Aegis. Tire périodiquement un
+    orbe à tête chercheuse vers le joueur tant qu'il vit."""
+    def __init__(self, boss, angle, orbit, life=480, color=(255, 95, 215)):
+        self.boss = boss
+        self.angle = angle
+        self.orbit = orbit
+        self.omega = random.uniform(0.018, 0.032) * random.choice((-1, 1))
+        self.life = life
+        self.color = color
+        self.fire_t = random.randint(45, 85)
+        self.spawn_t = 0
+        self.x = boss.x; self.y = boss.y
+        self.r = 18
+        self.dead = False
+
+    def update(self, player, projectiles, particles):
+        self.spawn_t += 1
+        self.angle += self.omega
+        bob = math.sin(self.spawn_t * 0.06) * 14
+        rad = self.orbit + bob
+        self.x = self.boss.x + math.cos(self.angle) * rad
+        self.y = self.boss.y + self.boss.float_offset + math.sin(self.angle) * rad
+        self.life -= 1
+        if self.life <= 0:
+            self.dead = True
+            burst(particles, self.x, self.y, 16, self.color, 4.0, 26, 0.0, 3)
+            return
+        if self.spawn_t < 26:        # apparition : pas encore de tir
+            return
+        self.fire_t -= 1
+        if self.fire_t <= 0:
+            self.fire_t = random.randint(75, 120)
+            ang = math.atan2(player.rect.centery - self.y,
+                             player.rect.centerx - self.x)
+            projectiles.append(BossProjectile(
+                self.x, self.y, math.cos(ang) * 3.0, math.sin(ang) * 3.0, DIM_REAL,
+                radius=8, life=300, homing=0.05, target=player, color=self.color,
+                kind="orb", dmg=2, hits_any_dim=True))
+            burst(particles, self.x, self.y, 6, self.color, 3.0, 16, 0.0, 2)
+
+    def draw(self, surf, cam):
+        cx = int(self.x - cam[0]); cy = int(self.y - cam[1])
+        grow = min(1.0, self.spawn_t / 26.0)
+        r = max(2, int(self.r * grow))
+        gs = pygame.Surface((r * 4, r * 4), pygame.SRCALPHA)
+        pygame.draw.circle(gs, (*self.color, 70), (r * 2, r * 2), r * 2)
+        pygame.draw.circle(gs, (*self.color, 120), (r * 2, r * 2), int(r * 1.3))
+        surf.blit(gs, (cx - r * 2, cy - r * 2), special_flags=pygame.BLEND_RGBA_ADD)
+        pygame.draw.circle(surf, (20, 4, 28), (cx, cy), r)              # corps sombre
+        pygame.draw.circle(surf, self.color, (cx, cy), max(1, r // 2))  # pupille
+        pygame.draw.circle(surf, self.color, (cx, cy), r, 2)            # liseré
+
+
+# ---------------------------------------------------------------------------
 # Damage Numbers
 # ---------------------------------------------------------------------------
 
@@ -2759,6 +2901,8 @@ class AegisBoss:
         self.emitter = None        # attaque canalisée en cours (dict) ou None
         self.spin = 0.0            # angle accumulé pour les spirales
         self.spin2 = 0.0           # second angle (contre-rotation)
+        self.lasers = []           # RotLaser actifs (Lasers Horloge)
+        self.minions = []          # VoidSpawn actifs (Invocations du Vide)
         self.invuln_t = 0
         self.dim = DIM_REAL
         self.dead = False
@@ -2896,6 +3040,9 @@ class AegisBoss:
                 burst(particles, r.x, r.y, 3, self._form_color(), 3.0, 26, 0.0, 3)
             projectiles[:] = []; beams[:] = []; rings[:] = []; telegraphs[:] = []
             self.emitter = None
+            for m in self.minions:
+                burst(particles, m.x, m.y, 6, self._form_color(), 3.0, 26, 0.0, 3)
+            self.lasers = []; self.minions = []
             burst(particles, self.x, self.y, 50, self._form_color(), 7.5, 48, 0.0, 5)
 
         # ── Étape 1b : aspiration continue (les particules convergent) ─────
@@ -2943,10 +3090,19 @@ class AegisBoss:
         # révélé, plus Aegis devient mobile et imprévisible.
         tx = max(self.ax_left + 240, min(self.ax_right - 240, player.rect.centerx))
         spd = 1.5 + 0.5 * self.phase
+        # Pendant les Lasers Horloge, Aegis s'ancre presque sur place : la
+        # rotation reste lisible (et impitoyable).
+        if self.emitter is not None and self.emitter.get("kind") == "lasers":
+            spd *= 0.18
         ty = self.target_y + math.sin(self.bob_t * 0.7) * (20 + 4 * self.phase)
         self._drift_to(tx, ty, spd)
 
-        # Une attaque canalisée (spirale, vagues d'anneaux, balayage) est
+        # Hazards persistants (lasers rotatifs, invocations du Vide) : ils vivent
+        # quelle que soit l'attaque en cours.
+        self._update_lasers(player, particles)
+        self._update_minions(player, projectiles, particles)
+
+        # Une attaque canalisée (spirale, anneaux, balayage, lasers) est
         # prioritaire : elle tire chaque frame jusqu'à épuisement.
         if self.emitter is not None:
             self._run_emitter(player, beams, projectiles, rings, telegraphs, particles)
@@ -3000,7 +3156,23 @@ class AegisBoss:
                     self._orb(projectiles, self.x, self.y, ang, e["speed"],
                               e["color"], dmg=e["dmg"], radius=8, life=e.get("life", 200))
 
+        elif k == "lasers":
+            # Les RotLaser tournent et collisionnent dans _update_lasers ; ici on
+            # gère la mise en scène de la « puissance » : traînées + vibration.
+            if e["t"] % 3 == 0:
+                for L in self.lasers:
+                    if L.live:
+                        d = random.uniform(70, L.length * 0.7)
+                        burst(particles, self.x + math.cos(L.angle) * d,
+                              self.y + math.sin(L.angle) * d, 1, L.color, 1.5, 12, 0.0, 3)
+            if any(L.live for L in self.lasers):
+                self.game.add_shake(4, 4)
+
         if e["t"] >= e["dur"]:
+            if k == "lasers":
+                for L in self.lasers:
+                    burst(particles, self.x, self.y, 2, L.color, 4.0, 20, 0.0, 3)
+                self.lasers = []
             self.emitter = None
             self.attack_timer = e.get("recover", 40)
 
@@ -3068,7 +3240,7 @@ class AegisBoss:
 
     # ── PHASE 4 : Le Vide Révélé (vrai visage — enfer de balles) ───────────
     def _phase4(self, player, beams, projectiles, rings, telegraphs, particles):
-        seq = ["rings", "wall", "starfall", "spiral", "shotgun"]
+        seq = ["rings", "wall", "implosion", "starfall", "spiral", "shotgun"]
         c = seq[self.step % len(seq)]; self.step += 1
         if c == "rings":
             self.emitter = dict(kind="rings", t=0, dur=180, rate=24, wave=0,
@@ -3086,6 +3258,10 @@ class AegisBoss:
             self.emitter = dict(kind="spiral", t=0, dur=160, rate=5, arms=3,
                                 dspin=0.18, speed=5.0, color=_AEGIS_COL_DARK,
                                 dmg=2, recover=34)
+        elif c == "implosion":
+            self._atk_implosion(player, projectiles, telegraphs, particles,
+                                count=30, speed=5.0, color=_AEGIS_COL_DARK)
+            self.attack_timer = 88
         else:
             self._atk_shotgun(player, projectiles, telegraphs, n=9, spread=0.9,
                               speed=7.2, dmg=2, color=_AEGIS_COL_DARK2)
@@ -3093,7 +3269,7 @@ class AegisBoss:
 
     # ── PHASE 5 : L'Héritage Volé (combos de pouvoirs dérobés) ─────────────
     def _phase5(self, player, beams, projectiles, rings, telegraphs, particles):
-        seq = ["combo_ws", "rings", "combo_rs", "shotgun", "swarm", "wall"]
+        seq = ["combo_ws", "summon", "rings", "combo_rs", "implosion", "shotgun", "swarm", "wall"]
         c = seq[self.step % len(seq)]; self.step += 1
         if c == "combo_ws":
             # Mur à franchir PENDANT une spirale.
@@ -3121,6 +3297,13 @@ class AegisBoss:
             self._atk_swarm(player, projectiles, n=6, dmg=2, homing=0.13,
                             color=_AEGIS_COL_DARK2)
             self.attack_timer = 66
+        elif c == "summon":
+            self._atk_summon(particles, n=2, orbit=210, life=520)
+            self.attack_timer = 70
+        elif c == "implosion":
+            self._atk_implosion(player, projectiles, telegraphs, particles,
+                                count=36, speed=5.2, color=_AEGIS_COL_DARK2)
+            self.attack_timer = 82
         else:
             self._atk_wall(player, beams, telegraphs, particles,
                            n_gaps=1, gap_w=200, dmg=3)
@@ -3128,7 +3311,7 @@ class AegisBoss:
 
     # ── PHASE 6 : Dernier Recours (aspiration + frénésie) ──────────────────
     def _phase6(self, player, beams, projectiles, rings, telegraphs, particles):
-        seq = ["sweep", "combo_ws", "rings", "dspiral", "starfall", "swarm"]
+        seq = ["lasers", "summon", "sweep", "combo_ws", "implosion", "rings", "dspiral", "starfall", "swarm"]
         c = seq[self.step % len(seq)]; self.step += 1
         if c == "sweep":
             self.emitter = dict(kind="sweep", t=0, dur=170, rate=2, dual=2,
@@ -3152,6 +3335,16 @@ class AegisBoss:
             self._atk_starfall(player, projectiles, telegraphs, particles,
                                count=22, dmg=2, gap=185, color=_AEGIS_COL_DARK)
             self.attack_timer = 52
+        elif c == "lasers":
+            self._cast_lasers(particles, n=2, omega=0.016, width=46, dmg=3,
+                              life=300, warmup=48)
+        elif c == "summon":
+            self._atk_summon(particles, n=3, orbit=215, life=540)
+            self.attack_timer = 62
+        elif c == "implosion":
+            self._atk_implosion(player, projectiles, telegraphs, particles,
+                                count=42, speed=5.4, color=_AEGIS_COL_DARK)
+            self.attack_timer = 72
         else:
             self._atk_swarm(player, projectiles, n=7, dmg=2, homing=0.14,
                             color=_AEGIS_COL_DARK2)
@@ -3159,7 +3352,7 @@ class AegisBoss:
 
     # ── PHASE 7 : Le Néant Absolu (marathon final — quasi impossible) ──────
     def _phase7(self, player, beams, projectiles, rings, telegraphs, particles):
-        seq = ["collapse", "sweep2", "combo_full", "rings", "starfall", "shotgun"]
+        seq = ["lasers", "summon", "collapse", "implosion", "sweep2", "combo_full", "rings", "starfall", "shotgun"]
         c = seq[self.step % len(seq)]; self.step += 1
         if c == "collapse":
             # Le Néant : anneaux 360° très denses + mur simultané.
@@ -3188,6 +3381,16 @@ class AegisBoss:
             self._atk_starfall(player, projectiles, telegraphs, particles,
                                count=26, dmg=2, gap=165, color=_AEGIS_COL_DARK)
             self.attack_timer = 46
+        elif c == "lasers":
+            self._cast_lasers(particles, n=3, omega=0.020, width=50, dmg=3,
+                              life=360, warmup=44)
+        elif c == "summon":
+            self._atk_summon(particles, n=4, orbit=220, life=560)
+            self.attack_timer = 56
+        elif c == "implosion":
+            self._atk_implosion(player, projectiles, telegraphs, particles,
+                                count=48, speed=5.6, color=_AEGIS_COL_DARK2)
+            self.attack_timer = 64
         else:
             self._atk_shotgun(player, projectiles, telegraphs, n=13, spread=1.1,
                               speed=7.8, dmg=2, color=_AEGIS_COL_DARK2)
@@ -3292,6 +3495,86 @@ class AegisBoss:
             self._orb(projectiles, self.x, self.y, a, 2.6, col, dmg=dmg,
                       radius=9, life=330, homing=homing, target=player)
 
+    # ── Lasers Horloge : l'ultime démonstration de puissance ───────────────
+    def _cast_lasers(self, particles, n, omega, width, dmg, life, warmup):
+        col = _AEGIS_COL_DARK2
+        base = random.uniform(0, math.tau)
+        # alterne le sens de rotation des aiguilles selon la phase
+        sign = 1 if self.phase % 2 == 0 else -1
+        for i in range(n):
+            self.lasers.append(RotLaser(
+                self, base + i * math.tau / n, omega * sign, length=1700,
+                width=width, dmg=dmg, life=life, warmup=warmup, color=col))
+        # Mise en scène : ralenti bref, secousse montante, flash, aura, déclaration.
+        self.game.start_slowmo(10)
+        self.game.add_shake(18, warmup)
+        self.game.flash(col, 8)
+        self.game.set_subtitle("Ma puissance n'a pas de limite.", 80)
+        burst(particles, self.x, self.y, 70, col, 8.5, 52, 0.0, 6)
+        self.emitter = dict(kind="lasers", t=0, dur=warmup + life + 16, recover=46)
+
+    def _update_lasers(self, player, particles):
+        if not self.lasers:
+            return
+        for L in self.lasers:
+            was_live = L.live
+            L.update()
+            if (not was_live) and L.live and not L.went_live:
+                # le faisceau s'allume : impact de puissance
+                L.went_live = True
+                self.game.add_shake(20, 16)
+                self.game.flash(self._form_color(), 9)
+                burst(particles, self.x, self.y, 26, L.color, 7.0, 34, 0.0, 5)
+            if L.hits(player.rect):
+                if player.hurt(L.dmg):
+                    self.game.add_shake(12, 16)
+                    burst(particles, player.rect.centerx, player.rect.centery,
+                          24, Pal.HP_FILL, 5.0, 28, 0.15, 4)
+        self.lasers[:] = [L for L in self.lasers if not L.dead]
+
+    # ── Invocations du Vide ────────────────────────────────────────────────
+    def _atk_summon(self, particles, n, orbit=210, life=480):
+        need = n - len(self.minions)
+        if need <= 0:
+            return
+        col = _AEGIS_COL_DARK2
+        self.game.add_shake(8, 12)
+        base = random.uniform(0, math.tau)
+        for i in range(need):
+            ang = base + i * math.tau / max(1, need)
+            self.minions.append(VoidSpawn(self, ang, orbit + i * 12, life=life, color=col))
+            burst(particles, self.x + math.cos(ang) * orbit,
+                  self.y + math.sin(ang) * orbit, 18, col, 5.0, 30, 0.0, 4)
+
+    def _update_minions(self, player, projectiles, particles):
+        if not self.minions:
+            return
+        for m in self.minions:
+            m.update(player, projectiles, particles)
+        self.minions[:] = [m for m in self.minions if not m.dead]
+
+    # ── Implosion convergente (mur de balles qui se referme) ───────────────
+    def _atk_implosion(self, player, projectiles, telegraphs, particles, count,
+                       speed, color, dmg=2):
+        cx, cy = player.rect.center
+        R = 760
+        gap_ang = random.uniform(0, math.tau)
+        gap_half = 0.46   # ~26° : le couloir de survie
+        def fire():
+            self.game.add_shake(11, 16)
+            burst(particles, cx, cy, 26, color, 6.0, 30, 0.0, 4)
+            for i in range(count):
+                a = i * math.tau / count
+                da = abs(((a - gap_ang + math.pi) % math.tau) - math.pi)
+                if da < gap_half:
+                    continue
+                sx = cx + math.cos(a) * R
+                sy = cy + math.sin(a) * R
+                self._orb(projectiles, sx, sy, a + math.pi, speed, color,
+                          dmg=dmg, radius=9, life=int(R / speed) + 45)
+        telegraphs.append(Telegraph("ring", 64, DIM_REAL, on_fire=fire, color=color,
+                                    x=cx, y=cy, r=R, hits_any_dim=True))
+
     # ── Interface combat ───────────────────────────────────────────────────
     def display_bar_fraction(self):
         if self.state == "intro":
@@ -3315,6 +3598,7 @@ class AegisBoss:
         if self.hp < 0: self.hp = 0
         if self.hp == 0 and self.phase == 7:
             self.dead = True
+            self.lasers = []; self.minions = []
             self.game.add_shake(22, 40)
             burst(particles, self.x, self.y, 90, _AEGIS_COL_DARK, 10.0, 70, 0.0, 6)
         self.hit_flash = 8
@@ -3365,6 +3649,20 @@ class AegisBoss:
         glow_col = self._form_color()
         vis = self.vis
         pulse = 0.75 + 0.25 * math.sin(self.bob_t * 1.5)
+
+        # ── Lasers Horloge : dessinés derrière Aegis (ils émanent de lui) ────
+        for L in self.lasers:
+            L.draw(surf, cam)
+        # Aura de puissance pulsante tant que les aiguilles balaient l'arène
+        if self.lasers:
+            chg = 0.5 + 0.5 * math.sin(self._anim_t * 0.4)
+            for k in range(3):
+                rr = int(self.vis * (1.3 + k * 0.32))
+                rs = pygame.Surface((rr * 2 + 4, rr * 2 + 4), pygame.SRCALPHA)
+                pygame.draw.circle(rs, (*_AEGIS_COL_DARK2, int(38 + 52 * chg)),
+                                   (rr + 2, rr + 2), rr, 3)
+                surf.blit(rs, (cx - rr - 2, cy - rr - 2),
+                          special_flags=pygame.BLEND_RGBA_ADD)
 
         # ── Aura de montée en puissance pendant la transition de phase ───────
         if self.state == "transition":
@@ -3436,6 +3734,10 @@ class AegisBoss:
         else:
             pygame.draw.circle(surf, glow_col, (cx, cy), self.radius)
             pygame.draw.circle(surf, (255, 255, 255), (cx, cy), self.radius, 3)
+
+        # ── Invocations du Vide (yeux flottants, devant Aegis) ───────────────
+        for m in self.minions:
+            m.draw(surf, cam)
 
 
 # ---------------------------------------------------------------------------
