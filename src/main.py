@@ -2866,22 +2866,74 @@ class AegisBoss:
             self.attack_timer = 55
             self.step = 0
 
+    # Sous-titres lore par phase entrante
+    _TRANS_SUBTITLE = {
+        2: "Le vernis se craquelle…",
+        3: "Le masque se fissure.",
+        4: "Assez de comédie. Voici mon vrai visage.",
+        5: "J'ai dévoré des dieux pour ça.",
+        6: "Je ne te laisserai pas partir.",
+        7: "Il n'y a plus rien. Que le Néant.",
+    }
+    _TRANS_MILESTONE = (4, 7)   # transitions « majeures » (révélation, finale)
+
     def _update_transition(self, player, beams, projectiles, rings, telegraphs, particles):
         self.transition_t += 1
-        self.invuln_t = 30
+        self.invuln_t = 60
+        nxt = self.next_phase
+        big = nxt in self._TRANS_MILESTONE
+        change_at = 42 if not big else 60     # instant de bascule de forme
+        end_at = 100 if not big else 140       # fin de l'animation
+
+        # ── Étape 1 : Aegis absorbe le terrain (le danger se dissipe) ──────
         if self.transition_t == 1:
-            self.game.start_slowmo(15)
-            self.game.add_shake(9, 16)
-            burst(particles, self.x, self.y, 45, self._form_color(), 7.5, 48, 0.0, 5)
-        elif self.transition_t == 45:
-            self.phase = self.next_phase
+            self.game.start_slowmo(22 if big else 16)
+            self.game.add_shake(13, 22)
+            # Aspire et dissout tous les projectiles/faisceaux en particules
+            for p in projectiles:
+                burst(particles, p.x, p.y, 2, self._form_color(), 3.0, 26, 0.0, 3)
+            for r in rings:
+                burst(particles, r.x, r.y, 3, self._form_color(), 3.0, 26, 0.0, 3)
+            projectiles[:] = []; beams[:] = []; rings[:] = []; telegraphs[:] = []
+            self.emitter = None
+            burst(particles, self.x, self.y, 50, self._form_color(), 7.5, 48, 0.0, 5)
+
+        # ── Étape 1b : aspiration continue (les particules convergent) ─────
+        if self.transition_t < change_at and self.transition_t % 3 == 0:
+            for _ in range(6):
+                a = random.uniform(0, math.tau)
+                d = random.uniform(140, 320)
+                burst(particles, self.x + math.cos(a) * d, self.y + math.sin(a) * d,
+                      1, self._form_color(), 1.0, 18, 0.0, 3)
+
+        # ── Étape 2 : bascule de forme (le moment dramatique) ──────────────
+        if self.transition_t == change_at:
+            self.phase = nxt
             self.game.announce_phase(AEGIS_PHASE_NAMES[self.phase])
-            # Changement de forme : burst de couleur
-            burst(particles, self.x, self.y, 60, self._form_color(), 9.0, 55, 0.0, 6)
-            self.game.add_shake(12, 20)
-        elif self.transition_t >= 95:
+            sub = self._TRANS_SUBTITLE.get(self.phase)
+            if sub:
+                self.game.set_subtitle(sub, 150)
+            if big:
+                # Révélation / finale : flash blanc aveuglant + éclats du masque
+                self.game.flash((255, 255, 255), 26)
+                self.game.add_shake(26, 42)
+                self.game.start_slowmo(18)
+                for _ in range(60):
+                    a = random.uniform(0, math.tau); sp = random.uniform(6, 13)
+                    particles.append(Particle(
+                        self.x, self.y, math.cos(a) * sp, math.sin(a) * sp,
+                        random.randint(30, 60),
+                        _AEGIS_COL_DARK2 if self.phase >= 4 else _AEGIS_COL_LIGHT,
+                        5, 0.0))
+            else:
+                self.game.flash(self._form_color(), 16)
+                self.game.add_shake(15, 22)
+            burst(particles, self.x, self.y, 70, self._form_color(), 9.5, 58, 0.0, 6)
+
+        # ── Étape 3 : reprise du combat ────────────────────────────────────
+        if self.transition_t >= end_at:
             self.state = "fighting"
-            self.attack_timer = 50
+            self.attack_timer = 55 if big else 45
             self.step = 0
             self.invuln_t = 0
 
@@ -3314,6 +3366,23 @@ class AegisBoss:
         vis = self.vis
         pulse = 0.75 + 0.25 * math.sin(self.bob_t * 1.5)
 
+        # ── Aura de montée en puissance pendant la transition de phase ───────
+        if self.state == "transition":
+            big = self.next_phase in self._TRANS_MILESTONE
+            ct = self.transition_t / (140.0 if big else 100.0)
+            charge = min(1.0, ct * 1.6)
+            # anneaux d'énergie convergents
+            for k in range(4):
+                rr = int(vis * (2.4 - k * 0.45) * (1.0 - charge * 0.55))
+                if rr <= 2: continue
+                aa = int((70 + 90 * charge) * (0.5 + 0.5 * math.sin(self._anim_t * 0.5 + k)))
+                ring_s = pygame.Surface((rr * 2 + 6, rr * 2 + 6), pygame.SRCALPHA)
+                col = _AEGIS_COL_DARK2 if (big and self.next_phase >= 4) else glow_col
+                pygame.draw.circle(ring_s, (*col, min(255, aa)), (rr + 3, rr + 3), rr, 3)
+                surf.blit(ring_s, (cx - rr - 3, cy - rr - 3),
+                          special_flags=pygame.BLEND_RGBA_ADD)
+            vis = int(self.vis * (1.0 + 0.12 * charge))   # le sprite « gonfle »
+
         # ── Couronne d'épines (formes mixed/dark : le masque tombe) ──────────
         if form != 'light':
             halo_surf = pygame.Surface((vis * 4, vis * 4), pygame.SRCALPHA)
@@ -3663,6 +3732,14 @@ class Game:
         self.shake = 0
         self.shake_strength = 0
         self.slowmo = 0
+        # Flash plein écran (impacts, transitions de phase)
+        self.flash_t = 0
+        self.flash_max = 1
+        self.flash_col = (255, 255, 255)
+        # Titre de forme affiché pendant les transitions Aegis
+        self.subtitle_text = ""
+        self.subtitle_t = 0
+        self.subtitle_max = 1
 
         self.player = None
         self.platforms = []
@@ -3993,6 +4070,17 @@ class Game:
     def start_slowmo(self, frames):
         self.slowmo = max(self.slowmo, frames)
 
+    def flash(self, col=(255, 255, 255), frames=18):
+        """Déclenche un flash plein écran qui s'estompe sur `frames` frames."""
+        self.flash_col = col
+        self.flash_t = frames
+        self.flash_max = frames
+
+    def set_subtitle(self, text, frames=150):
+        self.subtitle_text = text
+        self.subtitle_t = frames
+        self.subtitle_max = frames
+
     def announce_phase(self, text):
         self.announce_text = text
         self.announce_t = self.announce_max
@@ -4185,6 +4273,7 @@ class Game:
                     _scy = self.player.rect.centery - self.cam[1]
                     self.player._aim_angle = math.atan2(_my - _scy, _mx - _scx)
                 self.draw_world(in_arena=True)
+                self.draw_screen_flash()
                 if self.fighting_aegis and self.boss and self.boss.dead:
                     self.draw_aegis_ending()
                 elif self.aegis_dialog_active:
@@ -4194,6 +4283,7 @@ class Game:
                 else:
                     self.draw_boss_ui()
                     self.draw_announce()
+                    self.draw_subtitle()
                     self.draw_shield_ability()
                     self.draw_skill_bar()
             elif self.state == STATE_GAMEOVER:
@@ -4840,6 +4930,8 @@ class Game:
         self.heal_orbs[:] = [o for o in self.heal_orbs if not o.collected]
 
         if self.announce_t > 0: self.announce_t -= 1
+        if self.flash_t > 0: self.flash_t -= 1
+        if self.subtitle_t > 0: self.subtitle_t -= 1
 
         if self.player.hp <= 0:
             self.state = STATE_GAMEOVER
@@ -5669,6 +5761,30 @@ class Game:
                          (0, HEIGHT // 2 - 60), (WIDTH, HEIGHT // 2 - 60), 2)
         pygame.draw.line(self.screen, pal_accent(self.player.dimension if self.player else DIM_REAL),
                          (0, HEIGHT // 2 + 60), (WIDTH, HEIGHT // 2 + 60), 2)
+
+    def draw_screen_flash(self):
+        if self.flash_t <= 0:
+            return
+        t = self.flash_t / max(1, self.flash_max)
+        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        veil.fill((*self.flash_col, int(235 * t)))
+        self.screen.blit(veil, (0, 0))
+
+    def draw_subtitle(self):
+        """Sous-titre de forme (« Le masque se fissure… ») pendant les transitions."""
+        if self.subtitle_t <= 0 or not self.subtitle_text:
+            return
+        t = self.subtitle_t / max(1, self.subtitle_max)
+        if t > 0.8:
+            fade = (1.0 - t) / 0.2
+        elif t < 0.25:
+            fade = t / 0.25
+        else:
+            fade = 1.0
+        fade = max(0.0, min(1.0, fade))
+        surf = self.font_sm.render(self.subtitle_text, True, (255, 210, 240))
+        surf.set_alpha(int(255 * fade))
+        self.screen.blit(surf, surf.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 78)))
 
     def draw_god_dialog(self):
         pw, ph = 340, 180
