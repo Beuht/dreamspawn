@@ -1242,6 +1242,8 @@ class MoonBoss:
         self.max_hp_total = 1000   # 200 HP par phase × 5
         self.hp = self.max_hp_total
         self.phase = 1
+        self.phase_count = 5
+        self.display_name = "LA LUNE"
         self.state = "intro"
         self.intro_t = 0
         self.transition_t = 0
@@ -2660,6 +2662,534 @@ class MoonBoss:
         return (None, None, 0.0)
 
 
+# ===========================================================================
+# AEGIS — Boss final, 7 phases
+# ===========================================================================
+AEGIS_PHASE_THRESHOLDS = {1: 1.00, 2: 6/7, 3: 5/7, 4: 4/7, 5: 3/7, 6: 2/7, 7: 1/7}
+AEGIS_PHASE_HP_RANGES  = {
+    1: (1200, 1400), 2: (1000, 1200), 3: (800, 1000), 4: (600, 800),
+    5: (400, 600),   6: (200, 400),   7: (0, 200),
+}
+AEGIS_PHASE_NAMES = {
+    1: "L'ANGE GARDIEN",
+    2: "LA FISSURE",
+    3: "LE MENSONGE EXPOSÉ",
+    4: "LE VIDE RÉVÉLÉ",
+    5: "L'HÉRITAGE VOLÉ",
+    6: "DERNIER RECOURS",
+    7: "LE NÉANT ABSOLU",
+}
+# Couleurs par forme
+_AEGIS_COL_LIGHT = (255, 220, 130)   # angélique (or)
+_AEGIS_COL_MIXED = (200, 110, 220)   # transition (violet clair)
+_AEGIS_COL_DARK  = (130, 50, 200)    # vide (violet sombre)
+
+
+class AegisBoss:
+    """Boss final. Réutilise les primitives globales (Beam/BossProjectile/Ring/
+    Telegraph) et l'infra de combat de STATE_MOON. 7 phases."""
+
+    def __init__(self, center_x, center_y, game):
+        self.game = game
+        self.cx = center_x; self.cy = center_y
+        self.x = center_x; self.y = -160
+        self.target_x = center_x; self.target_y = center_y - 150
+        self.radius = 78           # hitbox
+        self.vis = 165             # rayon visuel du sprite
+        self.max_hp_total = 1400   # 200 HP × 7 phases
+        self.hp = self.max_hp_total
+        self.phase = 1
+        self.phase_count = 7
+        self.display_name = "AEGIS"
+        self.state = "intro"
+        self.intro_t = 0
+        self.transition_t = 0
+        self.next_phase = 1
+        self.attack_timer = 60
+        self.step = 0
+        self.invuln_t = 0
+        self.dim = DIM_REAL
+        self.dead = False
+        self.death_t = 0
+        self.float_offset = 0.0
+        self.bob_t = 0.0
+        self.hit_flash = 0
+        self.stun_timer = 0
+        self._anim_t = 0
+        # Attributs requis par l'infra partagée (update_moon / draw_boss_ui)
+        self.last_resort_active = False
+        self.last_resort_t = 0
+        self.post_dr = False
+        self.pre_dr_active = False
+        self.final_blow_active = False
+        self.final_form = False
+        self._p4_orb_collected = True   # pas d'orbe de soin chez Aegis
+        # Bornes d'arène (identiques à la Lune)
+        self.ax_left = -180; self.ax_right = 1480
+        self.ay_top = -200;  self.ay_bottom = 720
+        # Son hit (réutilise celui de la Lune si dispo)
+        _base_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+        try:
+            self._snd_hit = pygame.mixer.Sound(
+                os.path.join(_base_dir, "assets", "sounds", "boss_hit.mp3"))
+            self._snd_hit.set_volume(0.18)
+        except Exception:
+            self._snd_hit = None
+
+    # ── Propriétés / helpers ───────────────────────────────────────────────
+    @property
+    def rect(self):
+        return pygame.Rect(int(self.x) - self.radius, int(self.y) - self.radius,
+                           self.radius * 2, self.radius * 2)
+
+    def center(self):
+        return (int(self.x), int(self.y))
+
+    def _form(self):
+        """Forme visuelle selon la phase."""
+        if self.phase <= 2: return 'light'
+        if self.phase == 3: return 'mixed'
+        return 'dark'
+
+    def _form_color(self):
+        return {'light': _AEGIS_COL_LIGHT, 'mixed': _AEGIS_COL_MIXED,
+                'dark': _AEGIS_COL_DARK}[self._form()]
+
+    def _drift_to(self, tx, ty, speed=2.0):
+        dx = tx - self.x; dy = ty - self.y
+        d = math.hypot(dx, dy)
+        if d > speed:
+            self.x += dx / d * speed
+            self.y += dy / d * speed
+        else:
+            self.x, self.y = tx, ty
+
+    # ── Update principal ───────────────────────────────────────────────────
+    def update(self, player, beams, projectiles, rings, telegraphs, particles):
+        self.bob_t += 0.04
+        self._anim_t += 1
+        if self.dead:
+            self.death_t += 1
+            return
+        if self.hit_flash > 0: self.hit_flash -= 1
+        if self.invuln_t > 0: self.invuln_t -= 1
+        if self.stun_timer > 0:
+            self.stun_timer -= 1
+            return
+
+        if self.state == "intro":
+            self._update_intro(player, beams, telegraphs, particles)
+        elif self.state == "fighting":
+            t_phase = self._compute_target_phase()
+            if t_phase != self.phase:
+                self.state = "transition"
+                self.transition_t = 0
+                self.next_phase = t_phase
+            else:
+                self._update_phase(player, beams, projectiles, rings, telegraphs, particles)
+        elif self.state == "transition":
+            self._update_transition(player, beams, projectiles, rings, telegraphs, particles)
+
+        self.float_offset = math.sin(self.bob_t) * 14
+
+    def _compute_target_phase(self):
+        frac = self.hp / self.max_hp_total
+        for p in (7, 6, 5, 4, 3, 2):
+            if frac <= AEGIS_PHASE_THRESHOLDS[p]:
+                return max(p, self.phase)
+        return max(1, self.phase)
+
+    def _update_intro(self, player, beams, telegraphs, particles):
+        self.intro_t += 1
+        if self.intro_t < 90:
+            t = self.intro_t / 90.0
+            self.y = -160 + (self.target_y - (-160)) * (1 - (1 - t) ** 3)
+            self.x = self.target_x
+            if self.intro_t % 3 == 0:
+                burst(particles, self.x, self.y, 4, _AEGIS_COL_LIGHT, 3.0, 30, 0.05, 3)
+        elif self.intro_t == 90:
+            self.game.announce_phase(AEGIS_PHASE_NAMES[1])
+        elif self.intro_t >= 200:
+            self.state = "fighting"
+            self.attack_timer = 55
+            self.step = 0
+
+    def _update_transition(self, player, beams, projectiles, rings, telegraphs, particles):
+        self.transition_t += 1
+        self.invuln_t = 30
+        if self.transition_t == 1:
+            self.game.start_slowmo(15)
+            self.game.add_shake(9, 16)
+            burst(particles, self.x, self.y, 45, self._form_color(), 7.5, 48, 0.0, 5)
+        elif self.transition_t == 45:
+            self.phase = self.next_phase
+            self.game.announce_phase(AEGIS_PHASE_NAMES[self.phase])
+            # Changement de forme : burst de couleur
+            burst(particles, self.x, self.y, 60, self._form_color(), 9.0, 55, 0.0, 6)
+            self.game.add_shake(12, 20)
+        elif self.transition_t >= 95:
+            self.state = "fighting"
+            self.attack_timer = 50
+            self.step = 0
+            self.invuln_t = 0
+
+    # ── Dispatch des phases ────────────────────────────────────────────────
+    def _update_phase(self, player, beams, projectiles, rings, telegraphs, particles):
+        # Dérive horizontale vers le joueur (toutes phases)
+        tx = max(self.ax_left + 240, min(self.ax_right - 240, player.rect.centerx))
+        spd = 1.8 + 0.25 * self.phase
+        self._drift_to(tx, self.target_y, spd)
+
+        self.attack_timer -= 1
+        if self.attack_timer > 0:
+            return
+
+        fn = getattr(self, f"_phase{self.phase}")
+        fn(player, beams, projectiles, rings, telegraphs, particles)
+
+    # ── PHASE 1 : L'Ange Gardien ───────────────────────────────────────────
+    def _phase1(self, player, beams, projectiles, rings, telegraphs, particles):
+        seq = ["fan", "meteor", "fan"]
+        c = seq[self.step % len(seq)]; self.step += 1
+        if c == "fan":
+            self._atk_fan(player, projectiles, telegraphs, count=5, spread=0.9,
+                          speed=4.2, dmg=2, color=_AEGIS_COL_LIGHT)
+            self.attack_timer = 95
+        else:
+            self._atk_rain(player, projectiles, telegraphs, particles, count=4,
+                           dmg=2, color=_AEGIS_COL_LIGHT)
+            self.attack_timer = 105
+
+    # ── PHASE 2 : La Fissure ───────────────────────────────────────────────
+    def _phase2(self, player, beams, projectiles, rings, telegraphs, particles):
+        seq = ["fan2", "beam_v", "rain"]
+        c = seq[self.step % len(seq)]; self.step += 1
+        if c == "fan2":
+            self._atk_fan(player, projectiles, telegraphs, count=7, spread=1.2,
+                          speed=4.6, dmg=2, color=_AEGIS_COL_MIXED)
+            self.attack_timer = 90
+        elif c == "beam_v":
+            self._atk_beam_v(player.rect.centerx, beams, telegraphs, dmg=3, width=90)
+            self.attack_timer = 85
+        else:
+            self._atk_rain(player, projectiles, telegraphs, particles, count=6,
+                           dmg=2, color=_AEGIS_COL_MIXED)
+            self.attack_timer = 95
+
+    # ── PHASE 3 : Le Mensonge Exposé ───────────────────────────────────────
+    def _phase3(self, player, beams, projectiles, rings, telegraphs, particles):
+        seq = ["cross", "rain", "fan", "homing"]
+        c = seq[self.step % len(seq)]; self.step += 1
+        if c == "cross":
+            self._atk_cross(player, beams, telegraphs)
+            self.attack_timer = 95
+        elif c == "rain":
+            self._atk_rain(player, projectiles, telegraphs, particles, count=8,
+                           dmg=2, color=_AEGIS_COL_MIXED)
+            self.attack_timer = 85
+        elif c == "fan":
+            self._atk_fan(player, projectiles, telegraphs, count=9, spread=1.4,
+                          speed=5.0, dmg=2, color=_AEGIS_COL_MIXED)
+            self.attack_timer = 80
+        else:
+            self._atk_homing(player, projectiles, n=3, dmg=2)
+            self.attack_timer = 100
+
+    # ── PHASE 4 : Le Vide Révélé ───────────────────────────────────────────
+    def _phase4(self, player, beams, projectiles, rings, telegraphs, particles):
+        seq = ["nova", "rain", "cross", "fan"]
+        c = seq[self.step % len(seq)]; self.step += 1
+        if c == "nova":
+            self._atk_nova(rings, telegraphs, particles, dmg=3)
+            self.attack_timer = 120
+        elif c == "rain":
+            self._atk_rain(player, projectiles, telegraphs, particles, count=10,
+                           dmg=2, color=_AEGIS_COL_DARK)
+            self.attack_timer = 80
+        elif c == "cross":
+            self._atk_cross(player, beams, telegraphs)
+            self.attack_timer = 85
+        else:
+            self._atk_fan(player, projectiles, telegraphs, count=11, spread=1.6,
+                          speed=5.2, dmg=2, color=_AEGIS_COL_DARK)
+            self.attack_timer = 78
+
+    # ── PHASE 5 : L'Héritage Volé (pouvoirs des boss) ──────────────────────
+    def _phase5(self, player, beams, projectiles, rings, telegraphs, particles):
+        seq = ["crescents", "rain_dense", "nova", "cross"]
+        c = seq[self.step % len(seq)]; self.step += 1
+        if c == "crescents":
+            self._atk_crescents(player, projectiles, telegraphs, n=6)
+            self.attack_timer = 90
+        elif c == "rain_dense":
+            self._atk_rain(player, projectiles, telegraphs, particles, count=14,
+                           dmg=2, color=(255, 160, 80))
+            self.attack_timer = 75
+        elif c == "nova":
+            self._atk_nova(rings, telegraphs, particles, dmg=3)
+            self.attack_timer = 110
+        else:
+            self._atk_cross(player, beams, telegraphs)
+            self.attack_timer = 80
+
+    # ── PHASE 6 : Dernier Recours (aspiration + frénésie) ──────────────────
+    def _phase6(self, player, beams, projectiles, rings, telegraphs, particles):
+        seq = ["fan", "rain", "homing", "nova", "crescents"]
+        c = seq[self.step % len(seq)]; self.step += 1
+        if c == "fan":
+            self._atk_fan(player, projectiles, telegraphs, count=13, spread=1.8,
+                          speed=5.6, dmg=2, color=_AEGIS_COL_DARK)
+            self.attack_timer = 62
+        elif c == "rain":
+            self._atk_rain(player, projectiles, telegraphs, particles, count=12,
+                           dmg=2, color=_AEGIS_COL_DARK)
+            self.attack_timer = 60
+        elif c == "homing":
+            self._atk_homing(player, projectiles, n=4, dmg=2)
+            self.attack_timer = 70
+        elif c == "nova":
+            self._atk_nova(rings, telegraphs, particles, dmg=3)
+            self.attack_timer = 95
+        else:
+            self._atk_crescents(player, projectiles, telegraphs, n=8)
+            self.attack_timer = 65
+
+    # ── PHASE 7 : Le Néant Absolu ──────────────────────────────────────────
+    def _phase7(self, player, beams, projectiles, rings, telegraphs, particles):
+        seq = ["halfscreen", "rain", "cross", "nova", "fan"]
+        c = seq[self.step % len(seq)]; self.step += 1
+        if c == "halfscreen":
+            self._atk_halfscreen(beams, telegraphs, particles)
+            self.attack_timer = 120
+        elif c == "rain":
+            self._atk_rain(player, projectiles, telegraphs, particles, count=14,
+                           dmg=2, color=(180, 60, 220))
+            self.attack_timer = 58
+        elif c == "cross":
+            self._atk_cross(player, beams, telegraphs)
+            self.attack_timer = 70
+        elif c == "nova":
+            self._atk_nova(rings, telegraphs, particles, dmg=3)
+            self.attack_timer = 90
+        else:
+            self._atk_fan(player, projectiles, telegraphs, count=15, spread=2.0,
+                          speed=6.0, dmg=2, color=(180, 60, 220))
+            self.attack_timer = 60
+
+    # ── Briques d'attaque (basées sur les primitives globales) ─────────────
+    def _atk_fan(self, player, projectiles, telegraphs, count, spread, speed, dmg, color):
+        ox, oy = self.x, self.y
+        ang = math.atan2(player.rect.centery - oy, player.rect.centerx - ox)
+        def fire():
+            for i in range(count):
+                tt = i / (count - 1) if count > 1 else 0.5
+                a = ang - spread / 2 + spread * tt
+                projectiles.append(BossProjectile(
+                    ox, oy, math.cos(a) * speed, math.sin(a) * speed, DIM_REAL,
+                    radius=11, life=240, color=color, kind="orb", dmg=dmg,
+                    hits_any_dim=True))
+        telegraphs.append(Telegraph("fan", 55, DIM_REAL, on_fire=fire, color=color,
+                                    x=ox, y=oy, angle=ang, spread=spread,
+                                    count=count, length=700, hits_any_dim=True))
+
+    def _atk_rain(self, player, projectiles, telegraphs, particles, count, dmg, color):
+        xs = [random.randint(self.ax_left + 120, self.ax_right - 120) for _ in range(count)]
+        # un projectile vise toujours le joueur
+        xs[0] = player.rect.centerx
+        for x in xs:
+            def fire(px=x):
+                projectiles.append(BossProjectile(
+                    px, self.ay_top + 40, 0, 6.5, DIM_REAL, radius=10, life=260,
+                    color=color, kind="orb", dmg=dmg, hits_any_dim=True))
+            telegraphs.append(Telegraph("beam_v", 60, DIM_REAL, on_fire=fire,
+                                        color=color, x=x, top=self.ay_top,
+                                        bottom=self.ay_bottom, final_width=22,
+                                        hits_any_dim=True))
+
+    def _atk_beam_v(self, x, beams, telegraphs, dmg, width):
+        def fire():
+            rect = pygame.Rect(x - width // 2, self.ay_top, width,
+                               self.ay_bottom - self.ay_top + 400)
+            beams.append(Beam(rect, DIM_REAL, life=40, dmg=dmg,
+                              color=self._form_color(), hits_any_dim=True))
+            self.game.add_shake(14, 22)
+        telegraphs.append(Telegraph("beam_v", 80, DIM_REAL, on_fire=fire,
+                                    color=self._form_color(), x=x, top=self.ay_top,
+                                    bottom=self.ay_bottom + 400, final_width=width,
+                                    hits_any_dim=True))
+
+    def _atk_beam_h(self, y, beams, telegraphs, dmg, height):
+        def fire():
+            rect = pygame.Rect(self.ax_left, y - height // 2,
+                               self.ax_right - self.ax_left, height)
+            beams.append(Beam(rect, DIM_REAL, life=40, dmg=dmg,
+                              color=self._form_color(), hits_any_dim=True))
+            self.game.add_shake(14, 22)
+        telegraphs.append(Telegraph("beam_h", 80, DIM_REAL, on_fire=fire,
+                                    color=self._form_color(), y=y, left=self.ax_left,
+                                    right=self.ax_right, final_height=height,
+                                    hits_any_dim=True))
+
+    def _atk_cross(self, player, beams, telegraphs):
+        self._atk_beam_v(player.rect.centerx, beams, telegraphs, dmg=3, width=80)
+        self._atk_beam_h(player.rect.centery, beams, telegraphs, dmg=3, height=70)
+
+    def _atk_nova(self, rings, telegraphs, particles, dmg):
+        cx, cy = self.x, self.y
+        def fire():
+            rings.append(Ring(cx, cy, DIM_REAL, max_r=520, life=70,
+                              color=self._form_color(), dmg=dmg, hits_any_dim=True))
+            burst(particles, cx, cy, 50, self._form_color(), 9.0, 45, 0.0, 5)
+            self.game.add_shake(16, 26)
+        telegraphs.append(Telegraph("ring", 85, DIM_REAL, on_fire=fire,
+                                    color=self._form_color(), x=cx, y=cy, r=520,
+                                    hits_any_dim=True))
+
+    def _atk_homing(self, player, projectiles, n, dmg):
+        for i in range(n):
+            a = random.uniform(0, math.tau)
+            projectiles.append(BossProjectile(
+                self.x, self.y, math.cos(a) * 2.5, math.sin(a) * 2.5, DIM_REAL,
+                radius=10, life=300, homing=0.10, target=player,
+                color=self._form_color(), kind="orb", dmg=dmg, hits_any_dim=True))
+
+    def _atk_crescents(self, player, projectiles, telegraphs, n):
+        ox, oy = self.x, self.y
+        ang0 = math.atan2(player.rect.centery - oy, player.rect.centerx - ox)
+        def fire():
+            for i in range(n):
+                a = ang0 + (i - n / 2) * 0.22
+                projectiles.append(BossProjectile(
+                    ox, oy, math.cos(a) * 5.0, math.sin(a) * 5.0, DIM_REAL,
+                    radius=14, life=240, color=Pal.MOON_CRESC_R, kind="crescent",
+                    dmg=2, hits_any_dim=True))
+        telegraphs.append(Telegraph("fan", 50, DIM_REAL, on_fire=fire,
+                                    color=Pal.MOON_CRESC_R, x=ox, y=oy, angle=ang0,
+                                    spread=(n * 0.22), count=n, length=600,
+                                    hits_any_dim=True))
+
+    def _atk_halfscreen(self, beams, telegraphs, particles):
+        """Effacement : une moitié de l'arène devient zone de mort."""
+        left_half = random.random() < 0.5
+        mid = (self.ax_left + self.ax_right) // 2
+        if left_half:
+            x0, x1 = self.ax_left, mid
+        else:
+            x0, x1 = mid, self.ax_right
+        cx = (x0 + x1) // 2
+        width = x1 - x0
+        def fire():
+            rect = pygame.Rect(x0, self.ay_top, width,
+                               self.ay_bottom - self.ay_top + 400)
+            beams.append(Beam(rect, DIM_REAL, life=55, dmg=4,
+                              color=(140, 20, 200), hits_any_dim=True))
+            self.game.add_shake(20, 35)
+            for _ in range(30):
+                burst(particles, random.randint(x0, x1),
+                      random.randint(0, HEIGHT), 6, (140, 20, 200), 5.0, 40, 0.0, 5)
+        telegraphs.append(Telegraph("beam_v", 110, DIM_REAL, on_fire=fire,
+                                    color=(160, 30, 220), x=cx, top=self.ay_top,
+                                    bottom=self.ay_bottom + 400, final_width=width,
+                                    hits_any_dim=True))
+
+    # ── Interface combat ───────────────────────────────────────────────────
+    def display_bar_fraction(self):
+        if self.state == "intro":
+            return 1.0
+        if self.state == "transition":
+            t = self.transition_t
+            if t < 35:
+                return max(0.0, 1.0 - t / 35)
+            if t < 60:
+                return 0.0
+            return min(1.0, ((t - 60) / 35) ** 0.5)
+        low, high = AEGIS_PHASE_HP_RANGES.get(self.phase, (0, 1))
+        span = max(1, high - low)
+        return max(0.0, min(1.0, (self.hp - low) / span))
+
+    def take_dmg(self, dmg, current_dim, particles):
+        if self.state in ("intro", "transition"): return 0
+        if self.invuln_t > 0: return 0
+        if self.final_blow_active: return 0
+        self.hp -= dmg
+        if self.hp < 0: self.hp = 0
+        if self.hp == 0 and self.phase == 7:
+            self.dead = True
+            self.game.add_shake(22, 40)
+            burst(particles, self.x, self.y, 90, _AEGIS_COL_DARK, 10.0, 70, 0.0, 6)
+        self.hit_flash = 8
+        if self._snd_hit: self._snd_hit.play()
+        return dmg
+
+    def hit_targets(self, current_dim):
+        if self.state in ("intro", "transition"):
+            return []
+        class _T:
+            def __init__(s, r): s.rect = r
+        return [_T(self.rect)]
+
+    def get_pull(self):
+        # Phase 6+ : Aegis aspire le joueur vers lui (Aspiration)
+        if self.state == "fighting" and self.phase >= 6:
+            return (self.x, self.y, 0.10)
+        return (None, None, 0.0)
+
+    def parry_hit(self, particles):
+        # Aegis ne tire pas de projectiles parables pour l'instant ; no-op défensif
+        # pour rester compatible avec _check_parry sans planter.
+        self.hit_flash = 6
+        burst(particles, self.x, self.y, 18, self._form_color(), 6.0, 40, 0.0, 4)
+
+    # ── Rendu ──────────────────────────────────────────────────────────────
+    def draw(self, surf, cam, current_dim):
+        if self.dead and self.death_t > 90:
+            return
+        cx = int(self.x - cam[0])
+        cy = int(self.y + self.float_offset - cam[1])
+        form = self._form()
+        glow_col = self._form_color()
+
+        # Halo
+        vis = self.vis
+        gs = pygame.Surface((vis * 2, vis * 2), pygame.SRCALPHA)
+        pulse = 0.75 + 0.25 * math.sin(self.bob_t * 1.5)
+        pygame.draw.circle(gs, (*glow_col, int(55 * pulse)), (vis, vis), vis)
+        pygame.draw.circle(gs, (*glow_col, int(85 * pulse)), (vis, vis), int(vis * 0.65))
+        surf.blit(gs, (cx - vis, cy - vis))
+
+        sheet = getattr(self.game, '_aegis_sheet', None)
+        if sheet:
+            fw = getattr(self.game, '_aegis_frame_w', sheet.get_height())
+            nframes = max(1, sheet.get_width() // fw)
+            fi = (self._anim_t // 4) % nframes
+            try:
+                frame = sheet.subsurface((fi * fw, 0, fw, sheet.get_height()))
+            except Exception:
+                frame = sheet.subsurface((0, 0, fw, sheet.get_height()))
+            scaled = pygame.transform.scale(frame, (vis * 2, vis * 2)).copy()
+            # Teinte selon la forme
+            if form == 'dark':
+                tint = pygame.Surface(scaled.get_size(), pygame.SRCALPHA)
+                tint.fill((70, 20, 110, 255))
+                scaled.blit(tint, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+            elif form == 'mixed':
+                tint = pygame.Surface(scaled.get_size(), pygame.SRCALPHA)
+                tint.fill((180, 120, 190, 255))
+                scaled.blit(tint, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+            # Flash blanc quand touché
+            if self.hit_flash > 0:
+                wf = pygame.Surface(scaled.get_size(), pygame.SRCALPHA)
+                wf.fill((255, 255, 255, 110))
+                scaled.blit(wf, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+            # Dissolution en mourant
+            if self.dead:
+                scaled.set_alpha(max(0, 255 - int(self.death_t * 3)))
+            surf.blit(scaled, (cx - vis, cy - vis))
+        else:
+            pygame.draw.circle(surf, glow_col, (cx, cy), self.radius)
+            pygame.draw.circle(surf, (255, 255, 255), (cx, cy), self.radius, 3)
+
+
 # ---------------------------------------------------------------------------
 # Hub & Arena
 # ---------------------------------------------------------------------------
@@ -2815,6 +3345,15 @@ _AEGIS_BOSS_LINES = [
     "D'autres faux dieux vous attendent encore.\nTon chemin ne fait que commencer...",
 ]
 
+# Lignes de fin — mort d'Aegis (boss final)
+_AEGIS_DEATH_LINES = [
+    "...Incroyable.",
+    "Un mortel... m'a vaincu.",
+    "L'univers respire de nouveau.",
+    "Mais quelque part... un héros se demande",
+    "si c'était vraiment une victoire.",
+]
+
 
 class OverworldPlayer:
     """Personnage vue de dessus pour l'exploration (style Pokémon)."""
@@ -2960,9 +3499,14 @@ class Game:
         self.title_pulse_t = 0
         self.start_btn_rect = pygame.Rect(0, 0, 0, 0)  # mis à jour dans draw_title
         self.start_phase5_btn_rect = pygame.Rect(0, 0, 0, 0)
+        self.start_aegis_btn_rect = pygame.Rect(0, 0, 0, 0)
         self.p_press_times = []
         self.phase5_unlocked = False
         self.phase5_mode = False
+        # Boss final Aegis (accès debug : P×20 en <5s)
+        self.aegis_unlocked = False
+        self.fighting_aegis = False
+        self.aegis_ending_t = 0
         self.p5_cinematic_t = 0   # >0 while phase-5 intro plays (180 frames total)
 
         self.god_mode = False
@@ -3148,6 +3692,7 @@ class Game:
     def reset_to_title(self):
         self.state = STATE_TITLE
         self.phase5_mode = False
+        self.fighting_aegis = False
         self.aegis_dialog_active = False
         self.paused = False
         self.particles = []
@@ -3160,6 +3705,7 @@ class Game:
         self.heal_orbs = []
 
     def start_hub(self):
+        self.fighting_aegis = False
         self.particles.clear()
         self.projectiles_boss.clear()
         self.beams.clear()
@@ -3185,6 +3731,7 @@ class Game:
 
     def start_moon(self):
         self.aegis_dialog_active = False
+        self.fighting_aegis = False
         self.particles.clear()
         self.projectiles_boss.clear()
         self.beams.clear()
@@ -3217,6 +3764,39 @@ class Game:
         self.boss_split_t = 0
         self.boss_qmark_t = 0
         self.dream_exit_flash = 0
+        self._play_music("boss_moon.mp3", fadein_ms=2000)
+
+    def start_aegis_fight(self):
+        """Lance directement le combat final Aegis (7 phases)."""
+        self.aegis_dialog_active = False
+        self.fighting_aegis = True
+        self.aegis_ending_t = 0
+        self.shield_unlocked = True   # toutes les compétences dispo pour ce combat
+        self.particles.clear()
+        self.projectiles_boss.clear()
+        self.beams.clear()
+        self.rings.clear()
+        self.telegraphs.clear()
+        self.arrows.clear()
+        self.damage_numbers.clear()
+        self.heal_orbs.clear()
+        self.pre_dr_zoom_t = 0
+        self.post_dr_dialog_t = 0
+        self.final_blow_dialog_t = 0
+        self.platforms, spawn = make_moon_arena()
+        self.player = Player(*spawn)
+        self.boss = AegisBoss(640, 360, self)
+        self.cam = [0, 0]
+        self.state = STATE_MOON
+        self.victory_timer = 0
+        self.final_blow_hub_t = 0
+        self.sword_visible = False
+        self.boss_crack_active = False
+        self.boss_split_t = 0
+        self.boss_qmark_t = 0
+        self.dream_exit_flash = 0
+        self.ability_shield_t = 0
+        self.ability_shield_cd = 0
         self._play_music("boss_moon.mp3", fadein_ms=2000)
 
     def add_shake(self, strength, frames=10):
@@ -3289,9 +3869,12 @@ class Game:
                         now = time.time()
                         self.p_press_times = [t for t in self.p_press_times if now - t <= 5.0]
                         self.p_press_times.append(now)
-                        if len(self.p_press_times) >= 10:
+                        if len(self.p_press_times) >= 20:
+                            self.aegis_unlocked = True
                             self.phase5_unlocked = True
                             self.p_press_times = []
+                        elif len(self.p_press_times) >= 10:
+                            self.phase5_unlocked = True
                     # ── Bouclier (touche 1) ───────────────────────────────────────
                     elif (event.key == pygame.K_1 and self.state == STATE_MOON
                           and self.shield_unlocked
@@ -3339,6 +3922,9 @@ class Game:
                             elif self.pause_sel == 2: self.reset_to_title()
                     elif event.key == pygame.K_r and self.state in (STATE_GAMEOVER, STATE_VICTORY):
                         self.start_overworld()
+                    elif event.key == pygame.K_r and self.state == STATE_MOON and self.fighting_aegis and self.boss and self.boss.dead:
+                        self.fighting_aegis = False
+                        self.reset_to_title()
                     elif event.key == pygame.K_r and self.state == STATE_MOON and self.final_blow_hub_t > 0:
                         self.start_hub()
                     elif event.key == pygame.K_SPACE and self.state in (STATE_HUB, STATE_MOON):
@@ -3361,6 +3947,8 @@ class Game:
                         elif self.phase5_unlocked and self.start_phase5_btn_rect.collidepoint(event.pos):
                             self.phase5_mode = True
                             self.start_hub()
+                        elif self.aegis_unlocked and self.start_aegis_btn_rect.collidepoint(event.pos):
+                            self.start_aegis_fight()
                 elif event.type == pygame.MOUSEBUTTONDOWN and self.state in (STATE_HUB, STATE_MOON):
                     if self.settings_open:
                         self.handle_settings_mouse(event.pos[0], event.pos[1])
@@ -3410,7 +3998,9 @@ class Game:
                     _scy = self.player.rect.centery - self.cam[1]
                     self.player._aim_angle = math.atan2(_my - _scy, _mx - _scx)
                 self.draw_world(in_arena=True)
-                if self.aegis_dialog_active:
+                if self.fighting_aegis and self.boss and self.boss.dead:
+                    self.draw_aegis_ending()
+                elif self.aegis_dialog_active:
                     self.draw_aegis_dialog()
                 elif self.final_blow_hub_t > 0:
                     self._draw_victory_overlay()
@@ -3549,6 +4139,7 @@ class Game:
     # ── Overworld ────────────────────────────────────────────────────────────
 
     def start_overworld(self):
+        self.fighting_aegis = False
         T = OW_TILE
         self.ow_walls   = []
         self.ow_portals = []
@@ -3789,6 +4380,42 @@ class Game:
             fo.fill((0, 0, 0))
             fo.set_alpha(alpha)
             surf.blit(fo, (0, 0))
+
+    # ── Cinématique de fin : mort d'Aegis ───────────────────────────────────
+
+    def draw_aegis_ending(self):
+        surf = self.screen
+        t = self.aegis_ending_t
+        # Fondu au noir progressif (0 → 120 frames)
+        black_a = min(255, int(255 * t / 110.0))
+        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        veil.fill((0, 0, 0, black_a))
+        surf.blit(veil, (0, 0))
+
+        if t < 120:
+            return  # on attend le noir complet avant le texte
+
+        # Texte de fin : lignes qui apparaissent une à une
+        line_t = t - 120
+        per_line = 70
+        cx = WIDTH // 2
+        y0 = HEIGHT // 2 - (len(_AEGIS_DEATH_LINES) * 22)
+        for i, line in enumerate(_AEGIS_DEATH_LINES):
+            appear = line_t - i * per_line
+            if appear <= 0:
+                continue
+            alpha = min(255, int(appear * 6))
+            col = (200, 160, 255) if i < 2 else (220, 220, 235)
+            s = self.font_med.render(line, True, col)
+            s.set_alpha(alpha)
+            surf.blit(s, s.get_rect(center=(cx, y0 + i * 44)))
+
+        # Prompt de retour après que tout le texte soit affiché
+        if line_t > len(_AEGIS_DEATH_LINES) * per_line + 60:
+            pulse = 0.5 + 0.5 * math.sin(self.frame * 0.06)
+            hint = self.font_sm.render("[ R ]  Retour au titre", True,
+                                       (int(150 + 80 * pulse),) * 3)
+            surf.blit(hint, hint.get_rect(center=(cx, HEIGHT - 70)))
 
     # ── Animation sauvegarde style DS ───────────────────────────────────────
 
@@ -4033,6 +4660,17 @@ class Game:
                   60, Pal.HP_FILL, 8.0, 50, 0.0, 5)
 
         if self.boss and self.boss.dead and not self.boss.final_blow_active:
+            # ── Fin du combat Aegis : cinématique de fin ──────────────────
+            if self.fighting_aegis:
+                self.aegis_ending_t += 1
+                if self.aegis_ending_t == 1:
+                    self.player.score += 5000
+                if self.aegis_ending_t < 100 and self.aegis_ending_t % 6 == 0:
+                    burst(self.particles, self.boss.x + random.randint(-120, 120),
+                          self.boss.y + random.randint(-120, 120),
+                          30, _AEGIS_COL_DARK, 7.0, 55, 0.0, 5)
+                self.update_camera(self.player.rect, bounds=(-220, -200, 1600, 800))
+                return
             if self.aegis_dialog_active:
                 self.update_aegis_dialog()
                 return
@@ -4644,11 +5282,13 @@ class Game:
         bar_screen_y = BAR_Y
         below_y = BAR_Y + BAR_H + 3
 
-        name = self.font_sm.render(f"LA LUNE  —  Phase {self.boss.phase}", True, Pal.UI)
+        _bname = getattr(self.boss, 'display_name', 'LA LUNE')
+        _bcount = getattr(self.boss, 'phase_count', 5)
+        name = self.font_sm.render(f"{_bname}  —  Phase {self.boss.phase} / {_bcount}", True, Pal.UI)
         self.screen.blit(name, name.get_rect(midbottom=(WIDTH // 2, bar_screen_y - 2)))
 
-        # Phase 2 : dimension vulnérable
-        if self.boss.phase == 2 and self.boss.state == "fighting":
+        # Phase 2 : dimension vulnérable (Lune uniquement)
+        if isinstance(self.boss, MoonBoss) and self.boss.phase == 2 and self.boss.state == "fighting":
             dlbl = "Vulnerable : " + ("REALITE" if self.boss.dim == DIM_REAL else "REVE BRISE")
             dc = pal_accent(self.boss.dim)
             s = self.font_sm.render(dlbl, True, dc)
@@ -4979,6 +5619,26 @@ class Game:
                 self.screen.blit(glow5, (p5_x - 10, p5_y - 10))
             p5_lbl = self.font_med.render("⚡ PHASE 5", True, p5_text_col)
             self.screen.blit(p5_lbl, p5_lbl.get_rect(center=self.start_phase5_btn_rect.center))
+
+        # Bouton secret AEGIS (visible seulement si déverrouillé via P×20)
+        if self.aegis_unlocked:
+            ag_w, ag_h = 260, 48
+            ag_x = WIDTH // 2 - ag_w // 2
+            ag_y = (self.start_phase5_btn_rect.bottom if self.phase5_unlocked else btn_y + btn_h) + 16
+            self.start_aegis_btn_rect = pygame.Rect(ag_x, ag_y, ag_w, ag_h)
+            ag_hovered = self.start_aegis_btn_rect.collidepoint(mx, my)
+            ag_pulse = 0.6 + 0.4 * math.sin(self.title_pulse_t * 0.08)
+            ag_bg     = (40, 10, 70) if ag_hovered else (22, 6, 40)
+            ag_border  = (190, 90, 255) if ag_hovered else (120, 50, 190)
+            ag_text_col = (235, 200, 255) if ag_hovered else (190, 150, 230)
+            pygame.draw.rect(self.screen, ag_bg, self.start_aegis_btn_rect, border_radius=10)
+            pygame.draw.rect(self.screen, ag_border, self.start_aegis_btn_rect, 2, border_radius=10)
+            glowA = pygame.Surface((ag_w + 24, ag_h + 24), pygame.SRCALPHA)
+            pygame.draw.rect(glowA, (150, 60, 230, int(50 * ag_pulse)),
+                             (0, 0, ag_w + 24, ag_h + 24), border_radius=16)
+            self.screen.blit(glowA, (ag_x - 12, ag_y - 12))
+            ag_lbl = self.font_med.render("✦ AEGIS", True, ag_text_col)
+            self.screen.blit(ag_lbl, ag_lbl.get_rect(center=self.start_aegis_btn_rect.center))
 
         # Hint contrôles en bas
         hint_col = (180, 160, 220)
