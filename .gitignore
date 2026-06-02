@@ -2,6 +2,7 @@
 build/dist/
 build/Dreamspawn/
 build/build/
+build/work/
 build/*.spec
 __pycache__/
 *.pyc

@@ -91,6 +91,13 @@ ARROW_LIFETIME = 100
 BOW_COOLDOWN = 55    # anti-spam : cadence plus lente, dégâts plus forts
 BOW_DAMAGE = 5       # dégât fixe par flèche
 
+
+class _FrozenKeys:
+    """État clavier neutre : tout est relâché (héros gelé pendant une cinématique)."""
+    def __getitem__(self, k):
+        return False
+_FROZEN_KEYS = _FrozenKeys()
+
 DIM_REAL = 0
 DIM_DREAM = 1
 
@@ -626,17 +633,37 @@ class Telegraph:
 
             surf.blit(s, (int(left), int(y - fh / 2 - pad)))
         elif self.kind == "circle":
+            # Verrou de visée lisible : zone mortelle nette + anneau qui converge
+            # + croix tournante + flash blanc juste avant le tir.
             x = int(self.params["x"] - cam[0])
             y = int(self.params["y"] - cam[1])
             r = int(self.params.get("r", 50))
-            a = int(80 + 140 * t)
-            s = pygame.Surface((r * 2 + 4, r * 2 + 4), pygame.SRCALPHA)
-            pygame.draw.circle(s, (*self.color, int(40 + 70 * t)), (r + 2, r + 2), r)
-            pygame.draw.circle(s, (*self.color, a), (r + 2, r + 2), r, 3)
-            surf.blit(s, (x - r - 2, y - r - 2))
-            if t > 0.6:
-                pygame.draw.line(surf, self.color, (x - 8, y), (x + 8, y), 2)
-                pygame.draw.line(surf, self.color, (x, y - 8), (x, y + 8), 2)
+            pad = 16
+            s = pygame.Surface((r * 2 + pad * 2, r * 2 + pad * 2), pygame.SRCALPHA)
+            cc = r + pad
+            # remplissage qui monte (danger imminent)
+            pygame.draw.circle(s, (*self.color, int(28 + 95 * t2)), (cc, cc), r)
+            # bord net de la zone mortelle
+            pygame.draw.circle(s, (*self.color, int(110 + 120 * t)), (cc, cc), r, 3)
+            # anneau extérieur qui se resserre vers le bord : « ça arrive »
+            conv = int(r + (pad + 26) * (1.0 - t))
+            pygame.draw.circle(s, (*self.color, int(80 + 120 * t)), (cc, cc),
+                               max(r + 1, conv), 2)
+            # croix de visée tournante
+            ang = self.timer * 0.12
+            for kk in range(4):
+                aa = ang + kk * math.pi / 2
+                x1 = cc + int(math.cos(aa) * (r * 0.32))
+                y1 = cc + int(math.sin(aa) * (r * 0.32))
+                x2 = cc + int(math.cos(aa) * (r * 0.92))
+                y2 = cc + int(math.sin(aa) * (r * 0.92))
+                pygame.draw.line(s, (*self.color, int(120 + 120 * t)),
+                                 (x1, y1), (x2, y2), 2)
+            # snap final : éclat blanc juste avant le tir
+            if t > 0.82:
+                fa = int(210 * (t - 0.82) / 0.18)
+                pygame.draw.circle(s, (255, 255, 255, fa), (cc, cc), r, 4)
+            surf.blit(s, (x - cc, y - cc))
         elif self.kind == "fan":
             ox = self.params["x"] - cam[0]
             oy = self.params["y"] - cam[1]
@@ -660,9 +687,50 @@ class Telegraph:
             y = int(self.params["y"] - cam[1])
             r = int(self.params.get("r", 200) * (0.3 + 0.7 * t))
             a = int(70 + 150 * t)
-            s = pygame.Surface((r * 2 + 6, r * 2 + 6), pygame.SRCALPHA)
-            pygame.draw.circle(s, (*self.color, a), (r + 3, r + 3), r, 3)
-            surf.blit(s, (x - r - 3, y - r - 3))
+            pad = 6
+            s = pygame.Surface((r * 2 + pad * 2, r * 2 + pad * 2), pygame.SRCALPHA)
+            cc = r + pad
+            pygame.draw.circle(s, (*self.color, a), (cc, cc), r, 3)
+            # liseré intérieur léger pour lire le rayon final qui se remplit
+            pygame.draw.circle(s, (*self.color, int(a * 0.4)), (cc, cc), max(1, r - 5), 1)
+            # snap final : éclat blanc juste avant la déflagration
+            if t > 0.85:
+                fa = int(210 * (t - 0.85) / 0.15)
+                pygame.draw.circle(s, (255, 255, 255, fa), (cc, cc), r, 4)
+            surf.blit(s, (x - cc, y - cc))
+        elif self.kind == "collapse":
+            # SUPERNOVA — effondrement : un anneau SE RESSERRE vers un cœur qui
+            # s'embrase, dards rentrants → lecture inverse du « ring » : ça aspire
+            # tout, puis ça DÉTONE. Le joueur lit le compte à rebours de l'implosion.
+            x = int(self.params["x"] - cam[0])
+            y = int(self.params["y"] - cam[1])
+            R = int(self.params.get("r", 300))
+            pad = 12
+            s = pygame.Surface((R * 2 + pad * 2, R * 2 + pad * 2), pygame.SRCALPHA)
+            cc = R + pad
+            # cœur de l'étoile qui charge (croît avec t²)
+            core = int(6 + 34 * t2)
+            pygame.draw.circle(s, (*self.color, int(55 + 150 * t2)), (cc, cc), core)
+            pygame.draw.circle(s, (255, 255, 255, int(130 * t2)), (cc, cc), max(1, core // 2))
+            # anneau qui converge vers le cœur (de R → ~0.18R)
+            rr = max(2, int(R * (1.0 - 0.82 * t)))
+            pygame.draw.circle(s, (*self.color, int(90 + 150 * t)), (cc, cc), rr, 3)
+            pygame.draw.circle(s, (*self.color, int(40 + 80 * t)),
+                               (cc, cc), max(2, rr - 5), 1)
+            # dards rentrants qui pointent vers le cœur (aspiration)
+            for kk in range(14):
+                aa = kk * math.tau / 14 + self.timer * 0.04
+                ln = 14 + 22 * (1.0 - t)
+                x1 = cc + int(math.cos(aa) * (rr + 6))
+                y1 = cc + int(math.sin(aa) * (rr + 6))
+                x2 = cc + int(math.cos(aa) * (rr + 6 + ln))
+                y2 = cc + int(math.sin(aa) * (rr + 6 + ln))
+                pygame.draw.line(s, (*self.color, int(70 + 140 * t)), (x1, y1), (x2, y2), 2)
+            # snap blanc final : la détonation est imminente
+            if t > 0.8:
+                fa = int(235 * (t - 0.8) / 0.2)
+                pygame.draw.circle(s, (255, 255, 255, fa), (cc, cc), core + 8, 3)
+            surf.blit(s, (x - cc, y - cc))
         elif self.kind == "star_curtain":
             y = self.params.get("y", 0) - cam[1]
             left = self.params.get("left", -200) - cam[0]
@@ -820,6 +888,95 @@ class VoidSpawn:
         pygame.draw.circle(surf, self.color, (cx, cy), r, 2)            # liseré
 
 
+class CorrosionPool:
+    """Mare de corrosion du Vide : une flaque acide qui ronge le sol. Tant que
+    le joueur la touche, elle ronge sa vie par paliers rapides. Elle jaillit,
+    bouillonne, vomit des vapeurs, puis se résorbe. Signature d'Aegis :
+    interdire le terrain — un dieu qui souille le monde sous tes pieds."""
+    def __init__(self, x, y, r=84, life=360, dmg=1, color=(235, 40, 165)):
+        self.x = float(x); self.y = float(y)
+        self.r = r
+        self.life = life
+        self.max_life = life
+        self.dmg = dmg
+        self.color = color
+        self.dead = False
+        self.t = 0
+        self.bubbles = [(random.uniform(-0.8, 0.8), random.uniform(0.3, 1.0),
+                         random.uniform(0, math.tau)) for _ in range(7)]
+
+    @property
+    def cur_r(self):
+        f = self.life / self.max_life
+        if f > 0.88:                       # apparition (jaillit violemment)
+            return self.r * max(0.0, 1.0 - (f - 0.88) / 0.12)
+        if f < 0.18:                       # résorption
+            return self.r * (f / 0.18)
+        return float(self.r)
+
+    @property
+    def lethal(self):
+        # Mortelle seulement une fois bien sortie (lisibilité : on voit venir).
+        return self.cur_r > self.r * 0.5
+
+    @property
+    def rect(self):
+        r = int(self.cur_r)
+        return pygame.Rect(int(self.x) - r, int(self.y) - r, r * 2, r * 2)
+
+    def update(self, player, particles):
+        self.t += 1
+        self.life -= 1
+        if self.life <= 0:
+            self.dead = True
+            return
+        r = self.cur_r
+        if r > 6:
+            px = player.rect.centerx
+            py = player.rect.bottom
+            if self.lethal and abs(px - self.x) < r and abs(py - self.y) < r * 0.85:
+                if self.t % 13 == 0:        # rongement RAPIDE (était 18)
+                    player.hurt(self.dmg)
+                    if particles is not None:
+                        burst(particles, px, py, 6, self.color, 3.2, 18, 0.0, 3)
+            if particles is not None and self.t % 3 == 0:
+                # vapeurs acides qui montent (menace lisible)
+                burst(particles, self.x + random.uniform(-r, r), self.y, 1,
+                      self.color, 1.8, 26, -0.08, 3)
+
+    def draw(self, surf, cam):
+        r = int(self.cur_r)
+        if r <= 2:
+            return
+        cx = int(self.x - cam[0]); cy = int(self.y - cam[1])
+        pulse = 0.6 + 0.4 * math.sin(self.t * 0.22)
+        danger = self.lethal
+        pad = 14
+        s = pygame.Surface((r * 2 + pad * 2, r + pad * 2), pygame.SRCALPHA)
+        ox, oy = pad, pad
+        # 1) halo de danger (lueur rouge-rose pulsante qui crie « ne touche pas »)
+        glow_a = int((55 + 65 * pulse) * (1.0 if danger else 0.4))
+        pygame.draw.ellipse(s, (255, 60, 120, glow_a),
+                            (ox - 8, oy - 5, r * 2 + 16, r + 10))
+        # 2) nappe acide
+        pygame.draw.ellipse(s, (*self.color, int(95 * pulse)), (ox, oy, r * 2, r))
+        # 3) cœur du vide (creux sombre — contraste fort)
+        pygame.draw.ellipse(s, (40, 4, 52, 200),
+                            (ox + r // 3, oy + r // 4, r * 2 - r * 2 // 3, r - r // 2))
+        # 4) bord net mortel (lisibilité : la limite du danger)
+        pygame.draw.ellipse(s, (*self.color, 230), (ox, oy, r * 2, r), 3)
+        # 5) bulles qui crèvent en surface
+        for bx, by, ph in self.bubbles:
+            phase = (self.t * 0.05 + ph) % 1.0
+            bxp = ox + r + int(bx * r * 0.85)
+            byp = oy + int(r * (0.5 - 0.4 * math.sin(phase * math.pi)))
+            br = 2 + int(3 * math.sin(phase * math.pi))
+            if br > 0:
+                pygame.draw.circle(s, (*self.color, int(180 * pulse)), (bxp, byp), br)
+        surf.blit(s, (cx - r - pad, cy - oy),
+                  special_flags=pygame.BLEND_RGBA_ADD)
+
+
 # ---------------------------------------------------------------------------
 # Damage Numbers
 # ---------------------------------------------------------------------------
@@ -922,6 +1079,7 @@ class Player:
         self.shield = 0  # bouclier (excédant de soin)
 
         self.dimension = DIM_REAL
+        self.can_swap = True   # la « Fissure » (switch de dim) : Lune oui, Aegis non
 
         self.bow_cd = 0   # cooldown unique, plus de charge
         self._aim_angle = 0.0   # angle vers le curseur (radians, mis à jour chaque frame)
@@ -1014,7 +1172,7 @@ class Player:
                   pal_part(self.dimension), 4.0, 22, 0.1, 3)
             return "DOUBLE"
 
-        if len(self.jump_history) >= 3 and self.swap_cooldown <= 0:
+        if len(self.jump_history) >= 3 and self.swap_cooldown <= 0 and self.can_swap:
             self.swap_dimension(particles)
             self.jump_history.clear()
             return "SWAP"
@@ -1318,13 +1476,59 @@ class Platform:
         self.rect = pygame.Rect(x, y, w, h)
         self.dim_only = dim_only
         self.kind = kind
+        self.corrupt_t = 0        # frames de corruption restantes (0 = saine)
+        self.corrupt_max = 1      # pour normaliser le rendu
+
+    @property
+    def corrupted(self):
+        return self.corrupt_t > 0
+
+    def corrupt(self, frames):
+        """Aegis ronge cette plateforme : on ne peut plus s'y poser."""
+        self.corrupt_t = max(self.corrupt_t, frames)
+        self.corrupt_max = max(self.corrupt_max, self.corrupt_t)
+
+    def tick(self):
+        if self.corrupt_t > 0:
+            self.corrupt_t -= 1
 
     def collides(self, dim):
+        if self.corrupt_t > 0:
+            return False          # plateforme corrompue : on tombe au travers
         return self.dim_only is None or self.dim_only == dim
 
     def draw(self, surf, cam, current_dim):
-        active = self.collides(current_dim)
         rect = self.rect.move(-cam[0], -cam[1])
+        # ── Plateforme dévorée par le Néant : éclat de vide instable ───────
+        if self.corrupt_t > 0:
+            # Dalle dévorée par le Néant : wireframe magenta instable, arête
+            # supérieure rongée, débris qui s'élèvent → on LIT qu'elle n'est
+            # plus solide (on tombe au travers).
+            pulse = 0.5 + 0.5 * math.sin(self.corrupt_t * 0.28)
+            fade = min(1.0, self.corrupt_t / 30.0)   # s'efface quand la corruption finit
+            w, h = max(1, rect.w), max(1, rect.h)
+            s = pygame.Surface((w, h), pygame.SRCALPHA)
+            pygame.draw.rect(s, (90, 10, 120, int(70 * fade)), (0, 0, w, h),
+                             border_radius=4)
+            for i in range(0, w, 15):
+                hh = int(h * (0.3 + 0.7 * ((i * 7 % 11) / 11.0)))
+                pygame.draw.line(s, (255, 95, 215, int((60 + 120 * pulse) * fade)),
+                                 (i, 2), (i + 6, hh), 1)
+            pygame.draw.rect(s, (235, 40, 165, int((120 + 100 * pulse) * fade)),
+                             (0, 0, w, h), width=2, border_radius=4)
+            jag = [(i, int(1 + 5 * ((i * 13 % 7) / 7.0) * pulse))
+                   for i in range(0, w + 1, 8)]
+            if len(jag) >= 2:
+                pygame.draw.lines(s, (255, 150, 230, int(200 * fade)), False, jag, 2)
+            surf.blit(s, rect.topleft, special_flags=pygame.BLEND_RGBA_ADD)
+            if (self.corrupt_t // 4) % 2 == 0:
+                for k in range(3):
+                    dx = (self.corrupt_t * (k + 3)) % w
+                    dy = (self.corrupt_t * 2) % 16
+                    pygame.draw.circle(surf, (255, 95, 215),
+                                       (rect.left + dx, rect.top - dy), 2)
+            return
+        active = self.collides(current_dim)
         if not active:
             s = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
             ghost_dim = self.dim_only
@@ -2885,12 +3089,12 @@ class AegisBoss:
         self.cx = center_x; self.cy = center_y
         self.x = center_x; self.y = -160
         self.target_x = center_x; self.target_y = center_y - 150
-        self.radius = 78           # hitbox
-        self.vis = 165             # rayon visuel du sprite
+        self.radius = 100          # hitbox (agrandi avec le sprite)
+        self.vis = 215             # rayon visuel du sprite (DIEU colossal)
         self.max_hp_total = 1400   # 200 HP × 7 phases
         self.hp = self.max_hp_total
         self.phase = 1
-        self.phase_count = 7
+        self.phase_count = 2   # 2 phases VISIBLES (I avant COURROUX, II après)
         self.display_name = "AEGIS"
         self.state = "intro"
         self.intro_t = 0
@@ -2898,11 +3102,75 @@ class AegisBoss:
         self.next_phase = 1
         self.attack_timer = 60
         self.step = 0
+        # ── Dynamisme « façon Sans » : aucun ordre d'attaque mémorisable ────
+        self._last_pick = None      # dernier token joué (anti-répétition)
+        self._recent = []           # 3 derniers tokens (anti-routine)
+        self._tempo_chain = 0       # rafales d'attaques quasi instantanées restantes
+        self._dodge_streak = 0      # attaques esquivées d'affilée → agressivité montante
+        self._last_player_hp = None
+        self._blink_cd = 0          # cooldown du Trait du Néant (blink-beam)
+        self._taunts = [
+            "Tu danses bien… continue.", "Trop lent.",
+            "Je vois chacun de tes pas.", "Encore debout ?",
+            "Tu n'esquiveras pas le Néant.",
+        ]
         self.emitter = None        # attaque canalisée en cours (dict) ou None
         self.spin = 0.0            # angle accumulé pour les spirales
         self.spin2 = 0.0           # second angle (contre-rotation)
         self.lasers = []           # RotLaser actifs (Lasers Horloge)
         self.minions = []          # VoidSpawn actifs (Invocations du Vide)
+        self.pools = []            # CorrosionPool actives (La Corrosion du Vide)
+        self._cast_anim = 0        # flourish de canalisation (animation d'attaque)
+        self._cast_col = _AEGIS_COL_DARK2
+        self._combo_cd = 0         # anti-spam de l'Enchaînement Divin
+        # ── Cinématique de l'Enchaînement Divin (cadrage façon Sans) ─────────
+        self._cine_active = False  # True pendant toute la cinématique de combo
+        self._cine_t = 0           # frame courante de la cinématique
+        self._cine_dur = 1         # durée totale (barrage + entrée/sortie bandes)
+        self._cine_name = ""       # titre claqué dans le letterbox
+        self._cine_wave = 0        # vague en cours (compteur dramatique)
+        self._cine_waves = 1       # nb total de vagues du barrage
+        # ── NÉMÉSIS : cinématique d'OUVERTURE de la PHASE 7 (35 s, scriptée) ──
+        # Entièrement non-interactive : le héros est gelé puis soulevé par Aegis,
+        # broyé entre un trou noir et un trou blanc, et ressort à 1 PV.
+        self.nemesis_active = False
+        self.nemesis_t = 0
+        self.nemesis_dur = 3000    # 50 s @ 60 fps (AUCUN slow-mo : tient pile 50 s)
+        self.nemesis_fired = False # ne se déclenche qu'une seule fois
+        self._nem_px = 0.0         # position monde interpolée du héros soulevé
+        self._nem_py = 0.0
+        self._nem_gx = 0.0         # ancrage sol du héros (avant la lévitation)
+        self._nem_gy = 0.0
+        self._nem_hp_set = False   # héros réduit à 1 PV à la détonation
+        self._nem_spikes = []      # pics du SOL (base_x, base_y, ang, len, birth)
+        self._nem_slabs = []       # plateformes conjurées (cx, cy, w, h, birth, hit_t)
+        self._nem_slam_pts = []    # trajectoire de projection (t_abs, x, y, kind)
+        self._nem_impact_t = -999  # frame du dernier impact (pour la secousse)
+        self._nem_impact_xy = (0.0, 0.0)  # lieu du dernier impact (éclat radial)
+        self._nem_recoil = (0.0, 0.0)     # direction de rebond après impact
+        # ── COURROUX : cinématique d'attaque de la PHASE 4 (50 s, scriptée) ──
+        # Le masque angélique se brise ; Aegis déchaîne sa rage, sa brutalité et
+        # sa puissance (pression, déluge de météores, écrasement colossal).
+        self.courroux_active = False
+        self.courroux_t = 0
+        self.courroux_dur = 3000   # 50 s @ 60 fps (aucun slow-mo : tient pile 50 s)
+        self.courroux_fired = False
+        self._cx_gx = 0.0          # ancrage du héros (cloué au sol)
+        self._cx_gy = 0.0
+        self._cx_hp_set = False
+        self._cx_impact_t = -999   # dernier impact (secousse)
+        self._cx_impact_amp = 0.0
+        self._cx_meteors = []      # météores : [x, y, vx, vy, life]
+        # ── FINALE : LA VRAIE FIN DU JEU (après la mort en phase 7) ──────────
+        # Aegis refuse de finir : il ressurgit dans le Néant. Le héros n'a plus
+        # de pouvoir (esquive seule) + UNE compétence « ?! ». Quand il l'utilise,
+        # le temps s'arrête, le dieu épuisé est coupé en deux → texte final.
+        self.finale_active = False
+        self.finale_fired = False
+        self.finale_act = "prelude"   # prelude / dialogue / survival / timestop / ending
+        self.finale_t = 0             # frame dans l'acte courant
+        self.finale_fire_t = 0        # horloge de tir pendant la survie
+        self._fin_cut = False         # le coup fatal a été porté
         self.invuln_t = 0
         self.dim = DIM_REAL
         self.dead = False
@@ -2964,6 +3232,36 @@ class AegisBoss:
     def update(self, player, beams, projectiles, rings, telegraphs, particles):
         self.bob_t += 0.04
         self._anim_t += 1
+        if self._cast_anim > 0: self._cast_anim -= 1
+        if self._combo_cd > 0: self._combo_cd -= 1
+        # Avance la cinématique de l'Enchaînement Divin ; se clôt seule à la fin.
+        if self._cine_active:
+            self._cine_t += 1
+            if self._cine_t >= self._cine_dur:
+                self._cine_active = False
+                self._cine_t = 0
+        # NÉMÉSIS : cinématique d'ouverture de la phase 7 — gèle TOUT le combat
+        # (déplacement, attaques, transitions). Elle s'auto-clôt à la fin.
+        if self.nemesis_active:
+            self._update_nemesis(player, beams, projectiles, rings, telegraphs, particles)
+            self.float_offset = math.sin(self.bob_t) * 14
+            return
+        # COURROUX : cinématique d'attaque de la phase 4 — gèle aussi tout le combat.
+        if self.courroux_active:
+            self._update_courroux(player, beams, projectiles, rings, telegraphs, particles)
+            self.float_offset = math.sin(self.bob_t) * 14
+            return
+        # FINALE (la vraie fin) : pendant la SURVIE, Aegis tire son baroud ; les
+        # autres actes (cinématiques) sont pilotés côté Game.
+        if self.finale_active:
+            if self.finale_act == "survival":
+                self._finale_fire(player, projectiles, rings, telegraphs, particles)
+            self.float_offset = math.sin(self.bob_t) * 14
+            return
+        # La corruption du décor s'estompe toute seule, même hors phase active.
+        for _pf in getattr(self.game, "platforms", ()):
+            if getattr(_pf, "corrupt_t", 0) > 0:
+                _pf.tick()
         if self.dead:
             self.death_t += 1
             return
@@ -2985,6 +3283,12 @@ class AegisBoss:
                 self._update_phase(player, beams, projectiles, rings, telegraphs, particles)
         elif self.state == "transition":
             self._update_transition(player, beams, projectiles, rings, telegraphs, particles)
+            # Dès qu'Aegis bascule en PHASE 7, NÉMÉSIS prend la main (une fois).
+            if self.phase == 7 and not self.nemesis_fired:
+                self._start_nemesis(player, beams, projectiles, rings, telegraphs, particles)
+            # Dès qu'Aegis bascule en PHASE 4, COURROUX se déchaîne (une fois).
+            if self.phase == 4 and not self.courroux_fired:
+                self._start_courroux(player, beams, projectiles, rings, telegraphs, particles)
 
         self.float_offset = math.sin(self.bob_t) * 14
 
@@ -2996,18 +3300,41 @@ class AegisBoss:
         return max(1, self.phase)
 
     def _update_intro(self, player, beams, telegraphs, particles):
+        """Entrée GRANDIOSE (15 s) : descente théâtrale → éveil → titre → verdict."""
         self.intro_t += 1
-        if self.intro_t < 90:
-            t = self.intro_t / 90.0
-            self.y = -160 + (self.target_y - (-160)) * (1 - (1 - t) ** 3)
+        t = self.intro_t
+        if t < 150:                                   # suspens : tapi dans les cieux
+            self.x = self.target_x; self.y = -240
+            if t % 8 == 0:
+                burst(particles, self.cx + random.randint(-220, 220), 70,
+                      3, _AEGIS_COL_VOID, 2.0, 40, 0.0, 3)
+        elif t < 430:                                 # DESCENTE lente et lourde
+            u = (t - 150) / 280.0
+            ue = 1 - (1 - u) ** 3
+            self.y = -240 + (self.target_y - (-240)) * ue
             self.x = self.target_x
-            if self.intro_t % 3 == 0:
-                burst(particles, self.x, self.y, 4, _AEGIS_COL_LIGHT, 3.0, 30, 0.05, 3)
-        elif self.intro_t == 90:
+            if t % 4 == 0:
+                burst(particles, self.x, self.y + self.vis * 0.5,
+                      4, _AEGIS_COL_LIGHT, 3.0, 32, 0.04, 3)
+        else:
+            self.y = self.target_y
+        # ÉVEIL : il se pose, déploie son halo (flash + secousse + déflagration).
+        if t == 430:
+            self.game.add_shake(18, 28)
+            self.game.flash((255, 255, 255), 18)
+            burst(particles, self.x, self.y, 140, _AEGIS_COL_DARK, 9.5, 64, 0.0, 7)
+            burst(particles, self.x, self.y, 80, _AEGIS_COL_LIGHT, 6.0, 50, 0.0, 5)
+        # NOM DE PHASE claqué une fois le dieu révélé.
+        if t == 560:
             self.game.announce_phase(AEGIS_PHASE_NAMES[1])
-        elif self.intro_t >= 200:
+        # (Les répliques du dieu sont dessinées, lisibles, dans _draw_aegis_intro.)
+        if t == 850:
+            self.game.add_shake(12, 18)
+            burst(particles, self.x, self.y, 60, _AEGIS_COL_MIXED, 7.0, 46, 0.0, 5)
+        # FIN → le combat commence enfin.
+        if t >= 900:
             self.state = "fighting"
-            self.attack_timer = 55
+            self.attack_timer = 70
             self.step = 0
 
     # Sous-titres lore par phase entrante
@@ -3023,17 +3350,20 @@ class AegisBoss:
 
     def _update_transition(self, player, beams, projectiles, rings, telegraphs, particles):
         self.transition_t += 1
-        self.invuln_t = 60
         nxt = self.next_phase
+        # « big » = bascule d'ACTE (4 = COURROUX, 7 = NÉMÉSIS) : la cinématique
+        # correspondante prend le relais. Les paliers internes (2,3,5,6) ne sont
+        # PAS annoncés : le boss n'a que 2 phases visibles, la forme morphe en
+        # douceur avec les PV sans bannière intermédiaire.
         big = nxt in self._TRANS_MILESTONE
-        change_at = 42 if not big else 60     # instant de bascule de forme
-        end_at = 100 if not big else 140       # fin de l'animation
+        self.invuln_t = 60 if big else 14
+        change_at = 60 if big else 16          # instant de bascule de forme
+        end_at = 140 if big else 28            # fin de l'animation
 
         # ── Étape 1 : Aegis absorbe le terrain (le danger se dissipe) ──────
         if self.transition_t == 1:
-            self.game.start_slowmo(22 if big else 16)
-            self.game.add_shake(13, 22)
-            # Aspire et dissout tous les projectiles/faisceaux en particules
+            self.game.start_slowmo(22 if big else 6)
+            self.game.add_shake(13 if big else 6, 22 if big else 12)
             for p in projectiles:
                 burst(particles, p.x, p.y, 2, self._form_color(), 3.0, 26, 0.0, 3)
             for r in rings:
@@ -3043,25 +3373,22 @@ class AegisBoss:
             for m in self.minions:
                 burst(particles, m.x, m.y, 6, self._form_color(), 3.0, 26, 0.0, 3)
             self.lasers = []; self.minions = []
-            burst(particles, self.x, self.y, 50, self._form_color(), 7.5, 48, 0.0, 5)
+            burst(particles, self.x, self.y, 50 if big else 26, self._form_color(), 7.5, 48, 0.0, 5)
 
-        # ── Étape 1b : aspiration continue (les particules convergent) ─────
-        if self.transition_t < change_at and self.transition_t % 3 == 0:
+        # ── Étape 1b : aspiration continue (uniquement pour les bascules d'acte) ──
+        if big and self.transition_t < change_at and self.transition_t % 3 == 0:
             for _ in range(6):
                 a = random.uniform(0, math.tau)
                 d = random.uniform(140, 320)
                 burst(particles, self.x + math.cos(a) * d, self.y + math.sin(a) * d,
                       1, self._form_color(), 1.0, 18, 0.0, 3)
 
-        # ── Étape 2 : bascule de forme (le moment dramatique) ──────────────
+        # ── Étape 2 : bascule de forme ─────────────────────────────────────
         if self.transition_t == change_at:
             self.phase = nxt
-            self.game.announce_phase(AEGIS_PHASE_NAMES[self.phase])
-            sub = self._TRANS_SUBTITLE.get(self.phase)
-            if sub:
-                self.game.set_subtitle(sub, 150)
+            # AUCUNE annonce/sous-titre ici : seules COURROUX & NÉMÉSIS (qui
+            # s'enchaînent juste après pour les bascules d'acte) affichent du texte.
             if big:
-                # Révélation / finale : flash blanc aveuglant + éclats du masque
                 self.game.flash((255, 255, 255), 26)
                 self.game.add_shake(26, 42)
                 self.game.start_slowmo(18)
@@ -3072,20 +3399,434 @@ class AegisBoss:
                         random.randint(30, 60),
                         _AEGIS_COL_DARK2 if self.phase >= 4 else _AEGIS_COL_LIGHT,
                         5, 0.0))
+                burst(particles, self.x, self.y, 70, self._form_color(), 9.5, 58, 0.0, 6)
             else:
-                self.game.flash(self._form_color(), 16)
-                self.game.add_shake(15, 22)
-            burst(particles, self.x, self.y, 70, self._form_color(), 9.5, 58, 0.0, 6)
+                # Palier interne : morph DISCRET de la forme, sans interruption marquée.
+                self.game.flash(self._form_color(), 8)
+                burst(particles, self.x, self.y, 34, self._form_color(), 7.0, 46, 0.0, 5)
 
         # ── Étape 3 : reprise du combat ────────────────────────────────────
         if self.transition_t >= end_at:
             self.state = "fighting"
-            self.attack_timer = 55 if big else 45
+            self.attack_timer = 55 if big else 24
             self.step = 0
             self.invuln_t = 0
 
+    # ── NÉMÉSIS : cinématique d'ouverture de la PHASE 7 ────────────────────
+    def _nem_beats(self):
+        """Beats (frames @60fps) de NÉMÉSIS — partagés logique/rendu pour rester
+        synchro. Ordre : EYES, GRAB, LIFT, BLACK, WHITE, FACE, TAUNT, CHARGE,
+        LASER, SLAM, EXHAUST, CONVERGE, BOOM (total 3000 = 50 s)."""
+        return (120, 300, 480, 720, 960, 1140, 1260, 1410, 1560, 1980, 2580, 2700, 2880)
+
+    def _start_nemesis(self, player, beams, projectiles, rings, telegraphs, particles):
+        """Arme la cinématique NÉMÉSIS : 50 s scriptées, 100 % non-interactives."""
+        self.nemesis_active = True
+        self.nemesis_fired = True
+        self.nemesis_t = 0
+        self._nem_hp_set = False
+        self._nem_spikes = []
+        self._nem_slabs = []
+        self._nem_impact_t = -999
+        self._nem_impact_xy = (0.0, 0.0)
+        self._nem_recoil = (0.0, 0.0)
+        # Écran vidé : la cinématique démarre sur un terrain propre.
+        projectiles[:] = []; beams[:] = []; rings[:] = []; telegraphs[:] = []
+        self.emitter = None; self.lasers = []; self.minions = []
+        # Aegis se campe au centre haut de l'arène.
+        self.x = self.cx; self.y = self.target_y
+        # Ancrage : position sol du héros (point de départ de la lévitation).
+        self._nem_gx = float(player.rect.centerx)
+        self._nem_gy = float(player.rect.centery)
+        self._nem_px = self._nem_gx
+        self._nem_py = self._nem_gy
+        player.on_ground = False
+        # Trajectoire du PANTIN (ACT IV, façon Sans) : (t_abs, x, y, kind).
+        #   'floor' = écrasé au SOL → pics jaillissent du sol (uniquement là).
+        #   'slab'  = fracassé contre une PLATEFORME conjurée par Aegis.
+        B_SLAM = self._nem_beats()[9]
+        FY = 590                                  # centre du héros à l'impact sol
+        self._nem_slam_pts = [
+            (B_SLAM + 0,   self.cx,  self.target_y + 215, None),
+            (B_SLAM + 60,  520,  FY,  'floor'),
+            (B_SLAM + 115, 980,  300, 'slab'),
+            (B_SLAM + 170, 760,  FY,  'floor'),
+            (B_SLAM + 225, 300,  280, 'slab'),
+            (B_SLAM + 280, 620,  FY,  'floor'),
+            (B_SLAM + 335, 1000, 470, 'slab'),
+            (B_SLAM + 390, 440,  FY,  'floor'),
+            (B_SLAM + 445, 740,  240, 'slab'),
+            (B_SLAM + 500, 560,  FY,  'floor'),
+            (B_SLAM + 555, 640,  FY,  'floor'),  # dernier — épuisé
+        ]
+        # Caméra FIGÉE et recentrée (le zoom de la cinématique prend le relais).
+        self.game.cam[0] = 0.0; self.game.cam[1] = 0.0
+        self.game.shake = 0; self.game.shake_strength = 0
+        self.game.slowmo = 0          # pas de slow-mo : la séquence doit tenir 50 s
+        self.game.flash((255, 255, 255), 18)
+        self.game.set_subtitle("", 1)
+        if hasattr(self.game, "set_attack_callout"):
+            self.game.set_attack_callout("", 1)
+        burst(particles, self.x, self.y, 70, _AEGIS_COL_DARK, 8.0, 50, 0.0, 6)
+
+    def _nem_slam_pos(self, t, particles):
+        """ACT IV — LE PANTIN (façon Sans) : projection BRUTALE. Pics au SOL
+        uniquement ; plateformes conjurées comme surfaces d'impact ailleurs."""
+        pts = self._nem_slam_pts
+        # Segment courant.
+        seg = len(pts) - 2
+        if t < pts[-1][0]:
+            for i in range(len(pts) - 1):
+                if pts[i][0] <= t <= pts[i + 1][0]:
+                    seg = i; break
+        t0, x0, y0, _k0 = pts[seg]
+        t1, x1, y1, k1 = pts[seg + 1]
+        # Conjuration de la plateforme dès le début du segment qui y mène.
+        if k1 == 'slab' and t == t0 + 1:
+            self._nem_slabs.append([float(x1), float(y1), 192.0, 34.0, t, -1])
+        # Approche en ACCÉLÉRATION (ease-in quadratique) → percute sec.
+        if t >= pts[-1][0]:
+            self._nem_px, self._nem_py = float(x1), float(y1)
+        else:
+            u = (t - t0) / float(max(1, t1 - t0))
+            ue = u * u                     # vif à l'impact (≠ décélération)
+            self._nem_px = x0 + (x1 - x0) * ue
+            self._nem_py = y0 + (y1 - y0) * ue
+        # Rebond sec après impact (décroît sur ~9 frames) → ça cogne.
+        si = t - self._nem_impact_t
+        if 0 <= si < 9:
+            mag = 24 * (1 - si / 9.0)
+            self._nem_px += self._nem_recoil[0] * mag
+            self._nem_py += self._nem_recoil[1] * mag
+        # IMPACT : pile à l'arrivée d'un waypoint (≠ point de départ).
+        for k in range(1, len(pts)):
+            ti, xi, yi, ki = pts[k]
+            if t == ti:
+                self._nem_impact_t = t
+                self._nem_impact_xy = (xi, yi)
+                ax = xi - pts[k - 1][1]; ay = yi - pts[k - 1][2]
+                d = math.hypot(ax, ay) or 1.0
+                self._nem_recoil = (-ax / d, -ay / d)   # rebond = inverse de l'approche
+                if ki == 'floor':
+                    # PICS uniquement depuis le SOL (pointent vers le haut).
+                    for s in range(random.randint(4, 6)):
+                        spread = (s - 2.5) * 30 + random.randint(-10, 10)
+                        self._nem_spikes.append(
+                            [xi + spread, 636.0, -90, random.randint(80, 132), t])
+                else:
+                    # marque la plateforme conjurée comme FRACASSÉE.
+                    for sl in self._nem_slabs:
+                        if abs(sl[0] - xi) < 36 and abs(sl[1] - yi) < 36:
+                            sl[5] = t
+                burst(particles, int(xi), int(yi), 56, _AEGIS_COL_DARK, 11.5, 46, 0.18, 7)
+                burst(particles, int(xi), int(yi), 34, (255, 235, 250), 8.0, 32, 0.12, 5)
+                break
+
+    def _update_nemesis(self, player, beams, projectiles, rings, telegraphs, particles):
+        """Fait avancer NÉMÉSIS : gèle/anime le héros, scripte les temps forts."""
+        t = self.nemesis_t
+        # Terrain maintenu absolument propre durant toute la séquence.
+        if projectiles: projectiles[:] = []
+        if beams: beams[:] = []
+        if rings: rings[:] = []
+        if telegraphs: telegraphs[:] = []
+        # Aegis ancré au centre haut.
+        self._drift_to(self.cx, self.target_y, 6.0)
+
+        (B_EYES, B_GRAB, B_LIFT, B_BLACK, B_WHITE, B_FACE, B_TAUNT,
+         B_CHARGE, B_LASER, B_SLAM, B_EXHAUST, B_CONVERGE, B_BOOM) = self._nem_beats()
+
+        def _ease(u):
+            u = 0.0 if u < 0 else (1.0 if u > 1 else u)
+            return u * u * u * (u * (u * 6 - 15) + 10)   # smootherstep quintique
+
+        # ── Position du héros, acte par acte ──
+        hold_x, hold_y = self.cx, self.target_y + 215
+        jx = jy = 0
+        player.on_ground = False
+        if t <= B_GRAB:                                   # au sol, puis poigne
+            shiver = random.randint(-2, 2) if t > B_GRAB - 40 else 0
+            self._nem_px = self._nem_gx + shiver
+            self._nem_py = self._nem_gy
+            player.on_ground = t <= B_GRAB - 40
+        elif t <= B_LIFT:                                 # ARRACHAGE en arc
+            u = _ease((t - B_GRAB) / float(B_LIFT - B_GRAB))
+            self._nem_px = self._nem_gx + (hold_x - self._nem_gx) * u
+            arc = math.sin(min(1.0, u * 1.15) * math.pi) * 55
+            self._nem_py = self._nem_gy + (hold_y - self._nem_gy) * u - arc
+        elif t <= B_CHARGE:                               # suspension (vides, taunt)
+            self._nem_px = hold_x
+            self._nem_py = hold_y + math.sin((t - B_LIFT) * 0.05) * 7
+        elif t <= B_LASER:                                # charge des lasers
+            self._nem_px = hold_x
+            self._nem_py = hold_y + math.sin((t - B_LIFT) * 0.05) * 7
+            amp = int(1 + 4 * (t - B_CHARGE) / float(B_LASER - B_CHARGE))
+            jx = random.randint(-amp, amp); jy = random.randint(-amp, amp)
+        elif t <= B_SLAM:                                 # ACT III — LE DÉLUGE
+            self._nem_px = hold_x
+            self._nem_py = hold_y + math.sin((t - B_LIFT) * 0.05) * 6
+            jx = random.randint(-8, 8); jy = random.randint(-7, 7)
+        elif t <= B_EXHAUST:                              # ACT IV — LE PANTIN
+            self._nem_slam_pos(t, particles)
+            jx = random.randint(-2, 2); jy = random.randint(-2, 2)
+        elif t <= B_CONVERGE:                             # ramené au centre, épuisé
+            u = _ease((t - B_EXHAUST) / float(B_CONVERGE - B_EXHAUST))
+            fx0, fy0 = self._nem_slam_pts[-1][1], self._nem_slam_pts[-1][2]
+            self._nem_px = fx0 + (hold_x - fx0) * u
+            self._nem_py = fy0 + (hold_y - fy0) * u
+            jy = int(2 * math.sin(t * 0.2))
+        else:                                             # broyage final au centre
+            self._nem_px = hold_x; self._nem_py = hold_y
+            jx = random.randint(-9, 9); jy = random.randint(-8, 8)
+
+        player.rect.center = (int(self._nem_px) + jx, int(self._nem_py) + jy)
+        player.vx = 0.0; player.vy = 0.0
+        player.invuln = max(player.invuln, 12)
+
+        # Énergie rassemblée dans les mains d'Aegis (offsets ∝ taille du sprite).
+        if B_EYES < t <= B_GRAB and t % 2 == 0:
+            hox = self.vis * 0.58; hoy = self.vis * 0.47
+            for sgn in (-1, 1):
+                hx = self.cx + sgn * hox; hy = self.target_y + hoy
+                a = random.uniform(0, math.tau); d = random.uniform(20, 80)
+                particles.append(Particle(
+                    hx + math.cos(a) * d, hy + math.sin(a) * d,
+                    -math.cos(a) * 1.8, -math.sin(a) * 1.8,
+                    random.randint(12, 22), _AEGIS_COL_DARK2, 3, 0.0))
+
+        # Les deux trous aspirent la lumière (jusqu'à la convergence).
+        if B_LIFT < t < B_CONVERGE and t % 3 == 0:
+            for hx in (self.cx + 520, self.cx - 520):
+                a = random.uniform(0, math.tau); d = random.uniform(50, 150)
+                col = (250, 250, 255) if hx < self.cx else (70, 18, 80)
+                particles.append(Particle(
+                    hx + math.cos(a) * d, self.target_y + 40 + math.sin(a) * d,
+                    -math.cos(a) * 2.4, -math.sin(a) * 2.4,
+                    random.randint(18, 36), col, 4, 0.0))
+
+        # Charge des lasers : étincelles aspirées vers le héros.
+        if B_CHARGE < t <= B_LASER and t % 2 == 0:
+            for i in range(4):
+                a = i * math.tau / 4 + 0.4
+                sx = self._nem_px + math.cos(a) * 360
+                sy = self._nem_py + math.sin(a) * 360
+                particles.append(Particle(
+                    sx, sy, (self._nem_px - sx) * 0.05, (self._nem_py - sy) * 0.05,
+                    random.randint(10, 18), (255, 120, 220), 3, 0.0))
+
+        # Éclats sur le héros pendant le SPAM de lasers.
+        if B_LASER < t <= B_SLAM and t % 2 == 0:
+            burst(particles, int(self._nem_px), int(self._nem_py), 3,
+                  _AEGIS_COL_DARK2, 4.0, 16, 0.05, 3)
+
+        # DÉTONATION : collision des trous → ÉNORME explosion, héros à 1 PV.
+        if t == B_BOOM:
+            player.hp = 1
+            self._nem_hp_set = True
+            self.game.flash((255, 255, 255), 30)
+            cx, cy = int(self._nem_px), int(self._nem_py)
+            burst(particles, cx, cy, 200, (255, 255, 255), 15.0, 72, 0.0, 8)
+            burst(particles, cx, cy, 120, _AEGIS_COL_DARK, 12.0, 62, 0.0, 6)
+            burst(particles, cx, cy, 80, (40, 10, 60), 9.0, 56, 0.0, 6)
+
+        self.nemesis_t += 1
+        if self.nemesis_t >= self.nemesis_dur:
+            # FIN : la PHASE 7 commence enfin, héros à 1 PV.
+            self.nemesis_active = False
+            self.phase = 7; self.next_phase = 7
+            self.state = "fighting"
+            self.attack_timer = 75
+            self.invuln_t = 0
+            self.emitter = None
+            self._nem_spikes = []; self._nem_slabs = []  # nettoyage des FX scriptés
+            if not self._nem_hp_set:
+                player.hp = 1
+            player.invuln = max(player.invuln, 100)   # court répit à la reprise
+            player.rect.midbottom = (self.cx, 600)
+            player.vx = 0.0; player.vy = 0.0
+            self.game.announce_phase(AEGIS_PHASE_NAMES[7])
+
+    # ── COURROUX : cinématique d'attaque de la PHASE 4 (50 s, scriptée) ─────
+    def _cx_beats(self):
+        """Beats (frames @60fps) partagés logique/rendu. Ordre :
+        SHATTER, ROAR, PRESSURE, STORM, RAISE, SLAM, VERDICT (total 3000 = 50 s)."""
+        return (300, 420, 540, 1200, 2040, 2400, 2640)
+
+    def _start_courroux(self, player, beams, projectiles, rings, telegraphs, particles):
+        """Arme COURROUX : la rage de la phase 4, 50 s 100 % non-interactives."""
+        self.courroux_active = True
+        self.courroux_fired = True
+        self.courroux_t = 0
+        self._cx_hp_set = False
+        self._cx_impact_t = -999
+        self._cx_impact_amp = 0.0
+        self._cx_meteors = []
+        projectiles[:] = []; beams[:] = []; rings[:] = []; telegraphs[:] = []
+        self.emitter = None; self.lasers = []; self.minions = []
+        self.x = self.cx; self.y = self.target_y
+        self._cx_gx = float(player.rect.centerx)
+        self._cx_gy = float(player.rect.centery)
+        self.game.cam[0] = 0.0; self.game.cam[1] = 0.0
+        self.game.shake = 0; self.game.shake_strength = 0
+        self.game.slowmo = 0
+        self.game.flash((255, 255, 255), 14)
+        self.game.set_subtitle("", 1)
+        if hasattr(self.game, "set_attack_callout"):
+            self.game.set_attack_callout("", 1)
+        burst(particles, self.x, self.y, 70, _AEGIS_COL_LIGHT, 7.0, 50, 0.0, 5)
+
+    def _update_courroux(self, player, beams, projectiles, rings, telegraphs, particles):
+        """Scripte COURROUX : rupture du masque → pression → déluge → écrasement."""
+        t = self.courroux_t
+        if projectiles: projectiles[:] = []
+        if beams: beams[:] = []
+        if rings: rings[:] = []
+        if telegraphs: telegraphs[:] = []
+        self._drift_to(self.cx, self.target_y, 5.0)
+        (B_SHATTER, B_ROAR, B_PRESSURE, B_STORM, B_RAISE, B_SLAM, B_VERDICT) = self._cx_beats()
+        floor_y = 632
+
+        def _ease(u):
+            u = 0.0 if u < 0 else (1.0 if u > 1 else u)
+            return u * u * u * (u * (u * 6 - 15) + 10)
+
+        # Héros TRAÎNÉ DE FORCE au centre par la pression (acte II), puis cloué là.
+        gx, gy = self._cx_gx, self._cx_gy
+        ctr_x, ctr_y = self.cx, 582
+        if t < B_PRESSURE:
+            hx, hy, amp = gx, gy, 1
+        elif t < B_STORM:
+            u = _ease((t - B_PRESSURE) / float(B_STORM - B_PRESSURE))
+            hx = gx + (ctr_x - gx) * u
+            hy = gy + (ctr_y - gy) * u
+            amp = 2
+        elif t < B_RAISE:
+            hx, hy, amp = ctr_x, ctr_y, 4
+        elif t < B_SLAM:
+            hx, hy, amp = ctr_x, ctr_y, 2
+        else:
+            hx, hy, amp = ctr_x, ctr_y, 6
+        player.rect.center = (int(hx) + random.randint(-amp, amp),
+                              int(hy) + random.randint(-amp, amp))
+        player.vx = 0.0; player.vy = 0.0
+        player.invuln = max(player.invuln, 12)
+
+        # ── ACT I : RUPTURE du masque + RUGISSEMENT ──
+        if t == B_SHATTER:
+            self._cx_impact_t = t; self._cx_impact_amp = 22
+            self.game.flash((255, 240, 220), 16)
+            burst(particles, self.x, self.y - self.vis * 0.3, 90, _AEGIS_COL_LIGHT, 10.0, 55, 0.12, 6)
+            burst(particles, self.x, self.y - self.vis * 0.3, 50, (255, 255, 255), 7.0, 45, 0.10, 5)
+        if t == B_ROAR:
+            self._cx_impact_t = t; self._cx_impact_amp = 27
+            self.game.flash((255, 60, 40), 14)
+            burst(particles, self.x, self.y, 90, _AEGIS_COL_DARK, 9.5, 56, 0.0, 6)
+
+        # ── ACT II : PRESSION — débris arrachés du sol, aspirés vers Aegis ──
+        if B_PRESSURE <= t < B_STORM and t % 3 == 0:
+            ang = random.uniform(0, math.tau); d = random.uniform(260, 540)
+            dx = self.x + math.cos(ang) * d
+            dy = self.target_y + 140 + abs(math.sin(ang)) * 200
+            particles.append(Particle(dx, dy, (self.x - dx) * 0.018, (self.y - dy) * 0.02,
+                                      random.randint(30, 55), _AEGIS_COL_VOID, 4, 0.0))
+
+        # ── ACT III : LA MÉTÉORITE — un astre colossal se forge haut dans le ciel ──
+        if B_STORM <= t < B_RAISE and t % 2 == 0:
+            ang = random.uniform(0, math.tau); d = random.uniform(220, 660)
+            sx = self.cx + math.cos(ang) * d; sy = 150 + math.sin(ang) * d * 0.45
+            particles.append(Particle(sx, sy, (self.cx - sx) * 0.045, (150 - sy) * 0.045,
+                                      random.randint(14, 28), (255, 120, 60), 4, 0.0))
+
+        # ── ACT IV : il ABAT la météorite sur le héros (centre) ──
+        if B_RAISE <= t < B_SLAM:
+            u = _ease((t - B_RAISE) / float(B_SLAM - B_RAISE))
+            my = 150 + (floor_y - 150) * (u * u)          # chute accélérée
+            if t % 2 == 0:
+                burst(particles, self.cx + random.randint(-26, 26), int(my),
+                      6, (255, 120, 55), 3.5, 22, 0.0, 4)  # traînée de feu
+        if t == B_SLAM:
+            self._cx_impact_t = t; self._cx_impact_amp = 50
+            self.game.flash((255, 255, 255), 32)
+            burst(particles, self.cx, floor_y, 220, (255, 255, 255), 16.0, 78, 0.0, 8)
+            burst(particles, self.cx, floor_y, 150, (255, 120, 55), 12.5, 66, 0.0, 7)
+            burst(particles, self.cx, floor_y, 90, _AEGIS_COL_DARK, 11.0, 60, 0.0, 6)
+            # Frappe BRUTALE mais survivable (jamais létale) — la météorite l'écrase.
+            player.hp = max(1, player.hp - max(2, player.max_hp // 2))
+            self._cx_hp_set = True
+
+        self.courroux_t += 1
+        if self.courroux_t >= self.courroux_dur:
+            # Reprise EN DOUCEUR (pas de bascule brutale en combat) : ralenti bref,
+            # long répit avant la 1re attaque, et longue invuln pour souffler.
+            self.courroux_active = False
+            self.phase = 4; self.next_phase = 4
+            self.state = "fighting"
+            self.attack_timer = 150        # ~2.5 s avant qu'il ne réattaque
+            self.invuln_t = 60
+            self.emitter = None
+            self._cx_meteors = []
+            self.game.start_slowmo(40)     # rentrée au ralenti → fondu vers le combat
+            player.invuln = max(player.invuln, 150)
+            player.vx = 0.0; player.vy = 0.0
+            self.game.announce_phase(AEGIS_PHASE_NAMES[4])
+
+    # ── FINALE : LA VRAIE FIN DU JEU ────────────────────────────────────────
+    def _start_finale(self, player, beams, projectiles, rings, telegraphs, particles):
+        """Aegis refuse de finir : il ressurgit dans le NÉANT (après sa mort ph.7)."""
+        self.finale_active = True
+        self.finale_fired = True
+        self.finale_act = "prelude"
+        self.finale_t = 0
+        self.finale_fire_t = 0
+        self._fin_cut = False
+        self.dead = False; self.death_t = 0
+        self.phase = 7; self.next_phase = 7
+        self.state = "fighting"
+        self.invuln_t = 0
+        self.emitter = None; self.lasers = []; self.minions = []
+        projectiles[:] = []; beams[:] = []; rings[:] = []; telegraphs[:] = []
+        # LE NÉANT : une dalle noire + deux parois pour contenir le héros.
+        self.game.platforms = [
+            Platform(220, 560, 840, 80),
+            Platform(140, -120, 80, 940),
+            Platform(1060, -120, 80, 940),
+        ]
+        self.game.heal_orbs = []
+        self.x = float(self.cx); self.y = 255.0
+        self.target_x = self.cx; self.target_y = 255
+        self.game.cam[0] = 0.0; self.game.cam[1] = 0.0
+        self.game.shake = 0; self.game.shake_strength = 0
+        self.game.slowmo = 0
+        self.game.finale_gauge = 0.0
+        player.hp = player.max_hp
+        player.rect.midbottom = (640, 558)
+        player.vx = 0.0; player.vy = 0.0
+        player.invuln = max(player.invuln, 60)
+
+    def _finale_fire(self, player, projectiles, rings, telegraphs, particles):
+        """ACTE SURVIE (épuré) : PLUIE DE MÉTÉORITES à esquiver — 100 % dodgeable,
+        dmg=1. Plus simple : on bouge gauche/droite/saut pour les éviter."""
+        self._drift_to(self.cx, 255, 3.0)
+        self.finale_fire_t += 1
+        ft = self.finale_fire_t
+        rate = max(15, 30 - ft // 120)             # cadence qui s'intensifie un peu
+        if ft % rate == 0:
+            for _ in range(1 + (1 if ft > 420 else 0)):
+                x = random.uniform(230, 1050)
+                self._orb(projectiles, x, -40, math.pi / 2 + random.uniform(-0.14, 0.14),
+                          random.uniform(5.2, 6.8), (255, 120, 60),
+                          dmg=1, radius=random.randint(15, 21), life=260, kind="meteor")
+        if ft % 6 == 0:                            # petites braises ambiance
+            burst(particles, self.x, self.y, 2, _AEGIS_COL_DARK2, 2.0, 22, 0.0, 3)
+
     # ── Dispatch des phases ────────────────────────────────────────────────
     def _update_phase(self, player, beams, projectiles, rings, telegraphs, particles):
+        # Agressivité réactive : si le joueur vient d'encaisser, on relâche la pression.
+        _hp = getattr(player, "hp", None)
+        if _hp is not None:
+            if self._last_player_hp is not None and _hp < self._last_player_hp:
+                self._dodge_streak = 0
+            self._last_player_hp = _hp
         # Déplacement : flotte et poursuit le joueur ; plus le vrai visage est
         # révélé, plus Aegis devient mobile et imprévisible.
         tx = max(self.ax_left + 240, min(self.ax_right - 240, player.rect.centerx))
@@ -3101,6 +3842,7 @@ class AegisBoss:
         # quelle que soit l'attaque en cours.
         self._update_lasers(player, particles)
         self._update_minions(player, projectiles, particles)
+        self._update_pools(player, particles)
 
         # Une attaque canalisée (spirale, anneaux, balayage, lasers) est
         # prioritaire : elle tire chaque frame jusqu'à épuisement.
@@ -3113,6 +3855,10 @@ class AegisBoss:
             return
         getattr(self, f"_phase{self.phase}")(
             player, beams, projectiles, rings, telegraphs, particles)
+        # Difficulté accrue PHASES 4→7 (« un poquito plus dur ») : cadence resserrée.
+        if self.phase >= 4:
+            self.attack_timer = max(3, int(self.attack_timer * (0.92 - 0.045 * (self.phase - 4))))
+        self._dyn_tempo()
 
     # ── Émetteur d'attaques canalisées ─────────────────────────────────────
     def _run_emitter(self, player, beams, projectiles, rings, telegraphs, particles):
@@ -3168,6 +3914,14 @@ class AegisBoss:
             if any(L.live for L in self.lasers):
                 self.game.add_shake(4, 4)
 
+        elif k == "combo":
+            # Enchaînement scripté : on déclenche chaque sous-attaque à son top.
+            script = e["script"]
+            while e["idx"] < len(script) and e["t"] >= script[e["idx"]][0]:
+                self._combo_fire(script[e["idx"]][1], player, beams,
+                                 projectiles, rings, telegraphs, particles)
+                e["idx"] += 1
+
         if e["t"] >= e["dur"]:
             if k == "lasers":
                 for L in self.lasers:
@@ -3176,10 +3930,57 @@ class AegisBoss:
             self.emitter = None
             self.attack_timer = e.get("recover", 40)
 
+    # ── Sélection d'attaque « façon Sans » : imprévisible, non mémorisable ──
+    def _pick(self, pool, player):
+        """Choisit la prochaine attaque : aléatoire pondéré, sans répétition, et
+        réactif à la position du joueur. Casse l'ordre cyclique mémorisable."""
+        if self._blink_cd > 0:
+            self._blink_cd -= 1
+        cands = [t for t in pool
+                 if not (t == "blink" and self._blink_cd > 0)
+                 and not (t == "combo" and self._combo_cd > 0)]
+        if not cands:
+            cands = list(pool)
+        dist = abs(player.rect.centerx - self.x)
+        far = dist > 520; close = dist < 260
+        weights = []
+        for t in cands:
+            w = 1.0
+            if t == self._last_pick: w *= 0.10          # presque jamais deux fois de suite
+            if t in self._recent:   w *= 0.45           # évite la routine récente
+            if far and t in ("wall", "starfall", "rings", "collapse", "blink"):
+                w *= 1.9                                 # zone le joueur qui fuit
+            if close and t in ("nova", "implosion", "shotgun", "sweep", "sweep2"):
+                w *= 1.9                                 # punit le corps-à-corps
+            # (la rareté du blink est gérée par son cooldown, pas par un malus)
+            weights.append(max(0.02, w))
+        t = random.choices(cands, weights=weights, k=1)[0]
+        self._last_pick = t
+        self._recent.append(t)
+        if len(self._recent) > 3: self._recent.pop(0)
+        self._dodge_streak += 1
+        self._announce(t)            # on VOIT l'attaque : bandeau + flourish
+        return t
+
+    def _dyn_tempo(self):
+        """Rythme imprévisible : enchaînements éclair, d'autant plus fréquents que
+        le joueur esquive longtemps sans encaisser (« tu danses bien… »)."""
+        if self.emitter is not None:
+            return                                       # attaque canalisée : horloge propre
+        aggro = min(0.62, 0.05 * self.phase + 0.035 * self._dodge_streak
+                    + (0.045 if self.phase >= 4 else 0.0))
+        if self._tempo_chain > 0:
+            self._tempo_chain -= 1
+            self.attack_timer = max(3, int(self.attack_timer * 0.32))
+        elif random.random() < aggro:
+            self._tempo_chain = random.randint(1, 2)
+            self.attack_timer = max(3, int(self.attack_timer * 0.32))
+        if self._dodge_streak and self._dodge_streak % 7 == 0 and random.random() < 0.6:
+            self.game.set_subtitle(random.choice(self._taunts), 70)
+
     # ── PHASE 1 : L'Ange Gardien (le masque bienveillant) ──────────────────
     def _phase1(self, player, beams, projectiles, rings, telegraphs, particles):
-        seq = ["shotgun", "starfall", "nova", "shotgun"]
-        c = seq[self.step % len(seq)]; self.step += 1
+        c = self._pick(["shotgun", "starfall", "nova"], player)
         if c == "shotgun":
             self._atk_shotgun(player, projectiles, telegraphs, n=5, spread=0.55,
                               speed=6.0, dmg=2, color=_AEGIS_COL_LIGHT)
@@ -3189,19 +3990,19 @@ class AegisBoss:
                                count=9, dmg=2, gap=280, color=_AEGIS_COL_LIGHT)
             self.attack_timer = 95
         else:
-            self._atk_nova(rings, telegraphs, particles, dmg=2, color=_AEGIS_COL_LIGHT)
+            self._atk_nova(player, projectiles, rings, telegraphs, particles,
+                           dmg=2, color=_AEGIS_COL_LIGHT)
             self.attack_timer = 100
 
     # ── PHASE 2 : La Fissure (la première spirale traverse le masque) ──────
     def _phase2(self, player, beams, projectiles, rings, telegraphs, particles):
-        seq = ["spiral", "wall", "shotgun", "starfall"]
-        c = seq[self.step % len(seq)]; self.step += 1
+        c = self._pick(["spiral", "wall", "shotgun", "starfall"], player)
         if c == "spiral":
             self.emitter = dict(kind="spiral", t=0, dur=150, rate=6, arms=2,
                                 dspin=0.13, speed=4.4, color=_AEGIS_COL_LIGHT,
                                 dmg=2, recover=45)
         elif c == "wall":
-            self._atk_wall(player, beams, telegraphs, particles,
+            self._atk_wall(player, projectiles, telegraphs, particles,
                            n_gaps=2, gap_w=210, dmg=3)
             self.attack_timer = 85
         elif c == "shotgun":
@@ -3215,8 +4016,7 @@ class AegisBoss:
 
     # ── PHASE 3 : Le Mensonge Exposé (double spirale inversée) ─────────────
     def _phase3(self, player, beams, projectiles, rings, telegraphs, particles):
-        seq = ["dspiral", "starfall", "swarm", "shotgun", "wall"]
-        c = seq[self.step % len(seq)]; self.step += 1
+        c = self._pick(["dspiral", "starfall", "swarm", "shotgun", "wall"], player)
         if c == "dspiral":
             self.emitter = dict(kind="dspiral", t=0, dur=170, rate=6, arms=2,
                                 dspin=0.16, speed=4.8, color=_AEGIS_COL_MIXED,
@@ -3234,20 +4034,20 @@ class AegisBoss:
                               speed=7.0, dmg=2, color=_AEGIS_COL_MIXED)
             self.attack_timer = 66
         else:
-            self._atk_wall(player, beams, telegraphs, particles,
+            self._atk_wall(player, projectiles, telegraphs, particles,
                            n_gaps=2, gap_w=185, dmg=3)
             self.attack_timer = 78
 
     # ── PHASE 4 : Le Vide Révélé (vrai visage — enfer de balles) ───────────
     def _phase4(self, player, beams, projectiles, rings, telegraphs, particles):
-        seq = ["rings", "wall", "implosion", "starfall", "spiral", "shotgun"]
-        c = seq[self.step % len(seq)]; self.step += 1
+        c = self._pick(["rings", "wall", "implosion", "starfall", "spiral",
+                        "shotgun", "blink", "corrosion"], player)
         if c == "rings":
             self.emitter = dict(kind="rings", t=0, dur=180, rate=24, wave=0,
                                 count=22, speed=4.0, twist=0.14,
                                 color=_AEGIS_COL_DARK, dmg=2, recover=34)
         elif c == "wall":
-            self._atk_wall(player, beams, telegraphs, particles,
+            self._atk_wall(player, projectiles, telegraphs, particles,
                            n_gaps=2, gap_w=170, dmg=3)
             self.attack_timer = 70
         elif c == "starfall":
@@ -3262,6 +4062,10 @@ class AegisBoss:
             self._atk_implosion(player, projectiles, telegraphs, particles,
                                 count=30, speed=5.0, color=_AEGIS_COL_DARK)
             self.attack_timer = 88
+        elif c == "blink":
+            self._atk_blinkbeam(player, projectiles, telegraphs, particles)
+        elif c == "corrosion":
+            self._atk_corrosion(player, projectiles, telegraphs, particles, n=3, dmg=1)
         else:
             self._atk_shotgun(player, projectiles, telegraphs, n=9, spread=0.9,
                               speed=7.2, dmg=2, color=_AEGIS_COL_DARK2)
@@ -3269,11 +4073,12 @@ class AegisBoss:
 
     # ── PHASE 5 : L'Héritage Volé (combos de pouvoirs dérobés) ─────────────
     def _phase5(self, player, beams, projectiles, rings, telegraphs, particles):
-        seq = ["combo_ws", "summon", "rings", "combo_rs", "implosion", "shotgun", "swarm", "wall"]
-        c = seq[self.step % len(seq)]; self.step += 1
+        c = self._pick(["combo_ws", "summon", "rings", "combo_rs", "implosion",
+                        "shotgun", "swarm", "wall", "blink", "corrosion",
+                        "combo"], player)
         if c == "combo_ws":
             # Mur à franchir PENDANT une spirale.
-            self._atk_wall(player, beams, telegraphs, particles,
+            self._atk_wall(player, projectiles, telegraphs, particles,
                            n_gaps=2, gap_w=185, dmg=3, dur=80)
             self.emitter = dict(kind="spiral", t=0, dur=150, rate=6, arms=3,
                                 dspin=0.17, speed=4.6, color=_AEGIS_COL_DARK,
@@ -3304,21 +4109,29 @@ class AegisBoss:
             self._atk_implosion(player, projectiles, telegraphs, particles,
                                 count=36, speed=5.2, color=_AEGIS_COL_DARK2)
             self.attack_timer = 82
+        elif c == "blink":
+            self._atk_blinkbeam(player, projectiles, telegraphs, particles)
+        elif c == "corrosion":
+            self._atk_corrosion(player, projectiles, telegraphs, particles, n=4, dmg=1)
+        elif c == "combo":
+            self._atk_combo(player, beams, projectiles, rings, telegraphs,
+                            particles)
         else:
-            self._atk_wall(player, beams, telegraphs, particles,
+            self._atk_wall(player, projectiles, telegraphs, particles,
                            n_gaps=1, gap_w=200, dmg=3)
             self.attack_timer = 60
 
     # ── PHASE 6 : Dernier Recours (aspiration + frénésie) ──────────────────
     def _phase6(self, player, beams, projectiles, rings, telegraphs, particles):
-        seq = ["lasers", "summon", "sweep", "combo_ws", "implosion", "rings", "dspiral", "starfall", "swarm"]
-        c = seq[self.step % len(seq)]; self.step += 1
+        c = self._pick(["lasers", "summon", "sweep", "combo_ws", "implosion",
+                        "rings", "dspiral", "starfall", "swarm", "blink",
+                        "corrupt", "corrosion", "combo"], player)
         if c == "sweep":
             self.emitter = dict(kind="sweep", t=0, dur=170, rate=2, dual=2,
                                 dspin=0.085, speed=8.0, color=_AEGIS_COL_DARK2,
                                 dmg=2, recover=30)
         elif c == "combo_ws":
-            self._atk_wall(player, beams, telegraphs, particles,
+            self._atk_wall(player, projectiles, telegraphs, particles,
                            n_gaps=2, gap_w=170, dmg=3, dur=72)
             self.emitter = dict(kind="spiral", t=0, dur=150, rate=5, arms=3,
                                 dspin=0.2, speed=5.0, color=_AEGIS_COL_DARK,
@@ -3345,6 +4158,16 @@ class AegisBoss:
             self._atk_implosion(player, projectiles, telegraphs, particles,
                                 count=42, speed=5.4, color=_AEGIS_COL_DARK)
             self.attack_timer = 72
+        elif c == "blink":
+            self._atk_blinkbeam(player, projectiles, telegraphs, particles)
+        elif c == "corrupt":
+            self._atk_corrupt_world(player, projectiles, telegraphs, particles,
+                                    n=2, dur=440)
+        elif c == "corrosion":
+            self._atk_corrosion(player, projectiles, telegraphs, particles, n=5, dmg=1)
+        elif c == "combo":
+            self._atk_combo(player, beams, projectiles, rings, telegraphs,
+                            particles)
         else:
             self._atk_swarm(player, projectiles, n=7, dmg=2, homing=0.14,
                             color=_AEGIS_COL_DARK2)
@@ -3352,11 +4175,12 @@ class AegisBoss:
 
     # ── PHASE 7 : Le Néant Absolu (marathon final — quasi impossible) ──────
     def _phase7(self, player, beams, projectiles, rings, telegraphs, particles):
-        seq = ["lasers", "summon", "collapse", "implosion", "sweep2", "combo_full", "rings", "starfall", "shotgun"]
-        c = seq[self.step % len(seq)]; self.step += 1
+        c = self._pick(["lasers", "summon", "collapse", "implosion", "sweep2",
+                        "combo_full", "rings", "starfall", "shotgun", "blink",
+                        "corrupt", "corrosion", "combo"], player)
         if c == "collapse":
             # Le Néant : anneaux 360° très denses + mur simultané.
-            self._atk_wall(player, beams, telegraphs, particles,
+            self._atk_wall(player, projectiles, telegraphs, particles,
                            n_gaps=2, gap_w=165, dmg=3, dur=70)
             self.emitter = dict(kind="rings", t=0, dur=200, rate=16, wave=0,
                                 count=30, speed=4.6, twist=0.2,
@@ -3369,7 +4193,8 @@ class AegisBoss:
             # Pluie d'étoiles + double spirale + nova : saturation totale.
             self._atk_starfall(player, projectiles, telegraphs, particles,
                                count=20, dmg=2, gap=180, color=_AEGIS_COL_DARK2)
-            self._atk_nova(rings, telegraphs, particles, dmg=3, color=_AEGIS_COL_DARK)
+            self._atk_nova(player, projectiles, rings, telegraphs, particles,
+                           dmg=3, color=_AEGIS_COL_DARK)
             self.emitter = dict(kind="dspiral", t=0, dur=160, rate=6, arms=3,
                                 dspin=0.21, speed=5.2, color=_AEGIS_COL_DARK,
                                 color2=_AEGIS_COL_DARK2, dmg=2, recover=24)
@@ -3391,6 +4216,16 @@ class AegisBoss:
             self._atk_implosion(player, projectiles, telegraphs, particles,
                                 count=48, speed=5.6, color=_AEGIS_COL_DARK2)
             self.attack_timer = 64
+        elif c == "blink":
+            self._atk_blinkbeam(player, projectiles, telegraphs, particles)
+        elif c == "corrupt":
+            self._atk_corrupt_world(player, projectiles, telegraphs, particles,
+                                    n=3, dur=480)
+        elif c == "corrosion":
+            self._atk_corrosion(player, projectiles, telegraphs, particles, n=6, dmg=1)
+        elif c == "combo":
+            self._atk_combo(player, beams, projectiles, rings, telegraphs,
+                            particles)
         else:
             self._atk_shotgun(player, projectiles, telegraphs, n=13, spread=1.1,
                               speed=7.8, dmg=2, color=_AEGIS_COL_DARK2)
@@ -3426,7 +4261,9 @@ class AegisBoss:
 
     def _atk_starfall(self, player, projectiles, telegraphs, particles, count,
                       dmg, gap, color):
-        """Pluie verticale couvrant l'arène, sauf une colonne refuge (mobile)."""
+        """Pluie de comètes du Néant : des orbes plongent du ciel sur toute
+        l'arène, sauf une colonne-refuge mobile. Aucun faisceau — chaque chute
+        est marquée par un réticule du vide (langage propre à Aegis)."""
         left = self.ax_left; right = self.ax_right
         span = right - left
         safe = random.randint(left + gap, right - gap)
@@ -3435,58 +4272,92 @@ class AegisBoss:
             if abs(x - safe) < gap:
                 continue
             def fire(px=x):
-                self._orb(projectiles, px, self.ay_top + 30, math.pi / 2, 7.4,
+                burst(particles, px, 84, 6, color, 4.0, 16, 0.06, 3)
+                self._orb(projectiles, px, self.ay_top + 30, math.pi / 2, 7.8,
                           color, dmg=dmg, radius=10, life=240)
-            telegraphs.append(Telegraph("beam_v", 54, DIM_REAL, on_fire=fire,
-                                        color=color, x=x, top=self.ay_top,
-                                        bottom=self.ay_bottom, final_width=16,
+            # Tell : un réticule du vide en haut de la colonne (pas de pilier-faisceau).
+            telegraphs.append(Telegraph("circle", 50, DIM_REAL, on_fire=fire,
+                                        color=color, x=x, y=92, r=20,
                                         hits_any_dim=True))
 
-    def _atk_wall(self, player, beams, telegraphs, particles, n_gaps=2,
+    def _atk_wall(self, player, projectiles, telegraphs, particles, n_gaps=2,
                   gap_w=180, dmg=3, dur=70):
-        """Murs verticaux mortels traversant l'arène, perforés de fentes sûres."""
+        """La Herse du Néant : une herse dense d'orbes du vide descend du ciel,
+        perforée de colonnes-refuges (dont une sur le joueur). Aucun faisceau —
+        uniquement des projectiles : c'est le langage propre à Aegis."""
         left = self.ax_left; right = self.ax_right
         gaps = [max(left + gap_w, min(right - gap_w, player.rect.centerx))]
         for _ in range(max(0, n_gaps - 1)):
             gaps.append(random.randint(left + gap_w, right - gap_w))
-        gaps.sort()
-        intervals = []   # régions mortelles (complément des fentes)
-        cursor = left
-        for g in gaps:
-            g0, g1 = g - gap_w, g + gap_w
-            if g0 > cursor:
-                intervals.append((cursor, g0))
-            cursor = max(cursor, g1)
-        if cursor < right:
-            intervals.append((cursor, right))
         col = _AEGIS_COL_DARK
-        for (x0, x1) in intervals:
-            w = max(8, x1 - x0); cxg = (x0 + x1) / 2
-            def fire(xx=x0, ww=w):
-                rect = pygame.Rect(int(xx), self.ay_top, int(ww),
-                                   self.ay_bottom - self.ay_top + 400)
-                beams.append(Beam(rect, DIM_REAL, life=36, dmg=dmg, color=col,
-                                  hits_any_dim=True))
-            telegraphs.append(Telegraph("beam_v", dur, DIM_REAL, on_fire=fire,
-                                        color=col, x=cxg, top=self.ay_top,
-                                        bottom=self.ay_bottom + 400,
-                                        final_width=w, hits_any_dim=True))
-        def shake():
-            self.game.add_shake(16, 24)
-        telegraphs.append(Telegraph("circle", dur, DIM_REAL, on_fire=shake,
+        step = 30
+        xs = [x for x in range(int(left) + 20, int(right), step)
+              if not any(abs(x - g) < gap_w for g in gaps)]
+        def fire(cols=tuple(xs)):
+            self.game.add_shake(15, 22)
+            burst(particles, self.x, self.y, 26, col, 6.5, 30, 0.0, 5)
+            for cx in cols:
+                self._orb(projectiles, cx, self.ay_top + 20, math.pi / 2, 3.4,
+                          col, dmg=dmg, radius=12, life=320)
+        # Tell : réticules du vide alignés en haut des colonnes mortelles.
+        for cx in xs[::2]:
+            telegraphs.append(Telegraph("circle", dur, DIM_REAL,
+                                        color=col, x=cx, y=96, r=15,
+                                        hits_any_dim=True))
+        # Une seule télégraphe porte le déclenchement (sinon salves multiples).
+        telegraphs.append(Telegraph("circle", dur, DIM_REAL, on_fire=fire,
                                     color=col, x=self.x, y=self.y, r=1,
                                     hits_any_dim=True))
 
-    def _atk_nova(self, rings, telegraphs, particles, dmg, color=None):
+    def _atk_nova(self, player, projectiles, rings, telegraphs, particles, dmg, color=None):
+        """SUPERNOVA — l'étoile d'Aegis s'effondre puis DÉTONE. Deux contraintes
+        simultanées : une TRIPLE onde de choc concentrique (contrainte radiale —
+        il faut bouger vers/contre le centre) DOUBLÉE d'une déflagration d'orbes
+        360° percée d'un ou deux couloirs étroits (contrainte angulaire — il faut
+        tenir le bon angle). Aux phases hautes, un second voile tourné d'un
+        demi-couloir t'oblige à TE REPLACER en pleine onde. Plus de simple anneau
+        esquivable : une vraie mort stellaire."""
         col = color or self._form_color()
         cx, cy = self.x, self.y
+        p = self.phase
+        bullets   = 26 + 4 * p                       # densité de la déflagration
+        lanes     = 2 if p >= 6 else 1               # couloirs de survie
+        lane_half = 0.40 if p >= 7 else (0.46 if p >= 5 else 0.56)
+        n_rings   = 3 if p >= 4 else 2               # ondes concentriques
+        second    = p >= 6                           # second voile décalé
+        base      = random.uniform(0, math.tau)
         def fire():
-            rings.append(Ring(cx, cy, DIM_REAL, max_r=560, life=70, color=col,
-                              dmg=dmg, hits_any_dim=True))
-            burst(particles, cx, cy, 50, col, 9.0, 45, 0.0, 5)
-            self.game.add_shake(16, 26)
-        telegraphs.append(Telegraph("ring", 80, DIM_REAL, on_fire=fire, color=col,
-                                    x=cx, y=cy, r=560, hits_any_dim=True))
+            self.game.start_slowmo(6)
+            self.game.add_shake(22, 32)
+            self.game.flash((255, 245, 230), 9)
+            burst(particles, cx, cy, 72, col, 10.5, 56, 0.0, 6)
+            burst(particles, cx, cy, 30, (255, 250, 235), 7.0, 40, 0.0, 4)
+            # — triple onde de choc : rayons + vitesses échelonnés —
+            for i in range(n_rings):
+                rings.append(Ring(cx, cy, DIM_REAL, max_r=520 + i * 130,
+                                  life=56 + i * 16, color=col, dmg=dmg,
+                                  hits_any_dim=True))
+            # — déflagration 360° avec couloir(s) de survie —
+            gaps = [base + k * math.tau / lanes for k in range(lanes)]
+            for i in range(bullets):
+                a = i * math.tau / bullets
+                if any(abs(((a - g + math.pi) % math.tau) - math.pi) < lane_half
+                       for g in gaps):
+                    continue
+                self._orb(projectiles, cx, cy, a, 5.6, col, dmg=dmg,
+                          radius=9, life=210)
+            # — second voile décalé d'un demi-couloir : replacement forcé —
+            if second:
+                gaps2 = [g + math.tau / (2 * lanes) for g in gaps]
+                for i in range(bullets):
+                    a = i * math.tau / bullets + math.pi / bullets
+                    if any(abs(((a - g + math.pi) % math.tau) - math.pi) < lane_half
+                           for g in gaps2):
+                        continue
+                    self._orb(projectiles, cx, cy, a, 3.7, _AEGIS_COL_DARK2,
+                              dmg=dmg, radius=8, life=250)
+        telegraphs.append(Telegraph("collapse", 72, DIM_REAL, on_fire=fire, color=col,
+                                    x=cx, y=cy, r=300, hits_any_dim=True))
 
     def _atk_swarm(self, player, projectiles, n, dmg, homing=0.12, color=None):
         col = color or self._form_color()
@@ -3494,6 +4365,42 @@ class AegisBoss:
             a = random.uniform(0, math.tau)
             self._orb(projectiles, self.x, self.y, a, 2.6, col, dmg=dmg,
                       radius=9, life=330, homing=homing, target=player)
+
+    # ── Le Trait du Néant : blink imprévisible + trait éclair prédictif ─────
+    def _atk_blinkbeam(self, player, projectiles, telegraphs, particles):
+        """Aegis se dissout dans le vide et resurgit ailleurs pour transpercer le
+        joueur d'un trait fulgurant — origine ET timing imprévisibles (façon Sans)."""
+        px, py = player.rect.center
+        # Blink : réapparition à distance moyenne, sous un angle aléatoire.
+        a0 = random.uniform(0, math.tau)
+        R = random.randint(360, 520)
+        nx = max(self.ax_left + 130, min(self.ax_right - 130, px + math.cos(a0) * R))
+        ny = max(self.ay_top + 90,  min(self.ay_bottom - 170, py + math.sin(a0) * R))
+        burst(particles, self.x, self.y, 24, _AEGIS_COL_VOID, 7.0, 28, 0.0, 5)
+        self.x, self.y = nx, ny
+        ox, oy = self.x, self.y
+        burst(particles, ox, oy, 30, _AEGIS_COL_DARK2, 7.5, 32, 0.0, 5)
+        self.game.start_slowmo(6)
+        self.game.add_shake(11, 12)
+        self.game.flash(_AEGIS_COL_DARK2, 6)
+        # Visée prédictive : on mène la cible selon sa vitesse actuelle.
+        lead = 9
+        tx = px + getattr(player, "vx", 0.0) * lead
+        ty = py + getattr(player, "vy", 0.0) * lead
+        ang = math.atan2(ty - oy, tx - ox)
+        col = _AEGIS_COL_DARK2
+        def fire(a=ang, sx=ox, sy=oy):
+            self.game.add_shake(15, 14)
+            burst(particles, sx, sy, 22, col, 8.0, 30, 0.0, 5)
+            for i in range(13):                       # trait dense (lance) + léger éventail
+                tt = (i / 12 - 0.5)
+                self._orb(projectiles, sx, sy, a + tt * 0.12, 11.5, col,
+                          dmg=3, radius=9, life=160)
+        telegraphs.append(Telegraph("fan", 26, DIM_REAL, on_fire=fire, color=col,
+                                    x=ox, y=oy, angle=ang, spread=0.12, count=13,
+                                    length=900, hits_any_dim=True))
+        self.attack_timer = 54
+        self._blink_cd = random.randint(2, 4)
 
     # ── Lasers Horloge : l'ultime démonstration de puissance ───────────────
     def _cast_lasers(self, particles, n, omega, width, dmg, life, warmup):
@@ -3575,6 +4482,232 @@ class AegisBoss:
         telegraphs.append(Telegraph("ring", 64, DIM_REAL, on_fire=fire, color=color,
                                     x=cx, y=cy, r=R, hits_any_dim=True))
 
+    # ── La Corrosion du Vide : mares acides qui rongent le sol ─────────────
+    def _update_pools(self, player, particles):
+        if not self.pools:
+            return
+        for pool in self.pools:
+            pool.update(player, particles)
+        self.pools[:] = [p for p in self.pools if not p.dead]
+
+    def _atk_corrosion(self, player, projectiles, telegraphs, particles, n=4, dmg=1):
+        """Aegis vomit des mares de corrosion : le sol devient un piège mortel.
+        La 1re vise le joueur ; chaque impact crache une onde rasante qu'il faut
+        SAUTER. Le terrain se referme — la souillure d'un dieu sous tes pieds."""
+        floor_y = 600   # haut du sol de l'arène lunaire
+        col = _AEGIS_COL_DARK
+        span_l, span_r = self.ax_left + 140, self.ax_right - 140
+        # 1re mare sur le joueur, le reste étalé pour couper le sol en morceaux
+        xs = [int(max(span_l, min(span_r, player.rect.centerx)))]
+        for _ in range(max(0, n - 1)):
+            xs.append(random.randint(int(span_l), int(span_r)))
+        shock = self.phase >= 5     # onde rasante à sauter dès la phase 5
+        for fx in xs:
+            def fire(fx=fx):
+                self.pools.append(CorrosionPool(fx, floor_y, r=86, life=380,
+                                                dmg=dmg, color=col))
+                burst(particles, fx, floor_y, 34, col, 6.5, 36, -0.14, 6)
+                self.game.add_shake(9, 14)
+                if shock:
+                    for ang in (0.0, math.pi):     # onde rasante gauche + droite
+                        self._orb(projectiles, fx, floor_y - 18, ang, 7.2, col,
+                                  dmg=dmg + 1, radius=11, life=115)
+            telegraphs.append(Telegraph("circle", 50, DIM_REAL, on_fire=fire,
+                                        color=col, x=fx, y=floor_y, r=86,
+                                        hits_any_dim=True))
+        self.attack_timer = 78
+
+    # ── La Corruption du Monde : Aegis dévore le décor ─────────────────────
+    def _atk_corrupt_world(self, player, projectiles, telegraphs, particles,
+                           n=2, dur=460):
+        """Aegis dévore le décor : les plateformes corrompues s'effondrent sous
+        toi et EXPLOSENT en éclats du Vide. Il vise d'abord le sol sous tes pieds
+        — un dieu réécrit le monde et ne te laisse plus où te poser."""
+        all_p = [p for p in getattr(self.game, "platforms", ())
+                 if p.rect.height < 60 and p.rect.width < 400 and not p.corrupted]
+        if not all_p:
+            self.attack_timer = 48
+            return
+        # Priorité : la plateforme la plus proche du joueur (le forcer à fuir).
+        px, py = player.rect.centerx, player.rect.centery
+        all_p.sort(key=lambda p: (p.rect.centerx - px) ** 2
+                                 + (p.rect.centery - py) ** 2)
+        chosen = [all_p[0]]
+        rest = all_p[1:]
+        random.shuffle(rest)
+        chosen += rest[:max(0, n - 1)]
+        self.game.add_shake(12, 20)
+        col = _AEGIS_COL_VOID
+        for p in chosen:
+            cxp, cyp = p.rect.centerx, p.rect.centery
+            def fire(pl=p, fx=cxp, fy=cyp):
+                pl.corrupt(dur)
+                self.game.add_shake(16, 24)
+                self.game.flash(_AEGIS_COL_DARK2, 5)
+                burst(particles, fx, fy, 50, col, 8.0, 48, -0.03, 7)
+                burst(particles, fx, fy, 30, _AEGIS_COL_DARK2, 6.5, 36, 0.0, 5)
+                # Éruption d'éclats du Vide vers le haut : on ne campe pas dessus.
+                for k in range(11):
+                    a = -math.pi + k * math.pi / 10
+                    self._orb(projectiles, fx, fy, a, random.uniform(4.0, 6.5),
+                              _AEGIS_COL_DARK, dmg=2, radius=9, life=150)
+                # Posé dessus à l'instant fatal = brûlure du Néant.
+                if player.rect.bottom <= pl.rect.top + 18 and \
+                   pl.rect.left - 14 < player.rect.centerx < pl.rect.right + 14:
+                    player.hurt(2)
+            telegraphs.append(Telegraph("circle", 66, DIM_REAL, on_fire=fire,
+                                        color=col, x=cxp, y=cyp,
+                                        r=max(50, p.rect.width // 2),
+                                        hits_any_dim=True))
+        self.attack_timer = 78
+
+    # ── L'Enchaînement Divin : la CINÉMATIQUE (façon combat de Sans) ────────
+    def _atk_combo(self, player, beams, projectiles, rings, telegraphs, particles):
+        """L'Enchaînement Divin n'est plus une simple rafale : c'est une
+        CINÉMATIQUE jouable. Le temps se fige une demi-seconde, des bandes
+        letterbox se ferment, le titre claque — puis Aegis déverse vague après
+        vague, sans le moindre répit, en se téléportant et en corrompant le
+        monde, pour finir sur une SUPERNOVA. Le joueur garde la main et doit
+        survivre au cadrage : c'est le climax du boss final."""
+        self._combo_cd = 420
+        # — Mise en scène d'ouverture : on FIGE, on cadre, on claque le titre. —
+        self.game.start_slowmo(12)
+        self.game.add_shake(18, 26)
+        self.game.flash(_AEGIS_COL_DARK2, 10)
+        self._cast_flourish(_AEGIS_COL_DARK2, 44)
+        burst(particles, self.x, self.y, 80, _AEGIS_COL_DARK2, 9.0, 56, 0.0, 6)
+        burst(particles, self.x, self.y, 40, _AEGIS_COL_DARK, 6.0, 44, 0.0, 4)
+        p = self.phase
+        # Scripts (frame, token). « wave » = nouvelle vague (pulse + compteur).
+        if p <= 5:
+            script = [(0, "wave"), (4, "shotgun"), (40, "starfall"),
+                      (78, "wave"), (82, "swarm"), (116, "implosion"),
+                      (158, "wave"), (162, "shotgun"), (198, "nova")]
+            dur = 268
+        elif p == 6:
+            script = [(0, "wave"), (4, "wall"), (36, "starfall"), (70, "shotgun"),
+                      (104, "wave"), (108, "swarm"), (140, "corrosion"),
+                      (176, "implosion"),
+                      (214, "wave"), (218, "blink"), (250, "nova")]
+            dur = 320
+        else:
+            script = [(0, "wave"), (4, "wall"), (30, "starfall"), (60, "shotgun"),
+                      (92, "wave"), (96, "corrosion"), (124, "swarm"),
+                      (152, "implosion"),
+                      (186, "wave"), (190, "corrupt"), (222, "blink"),
+                      (252, "shotgun"),
+                      (286, "wave"), (290, "nova")]
+            dur = 364
+        waves = sum(1 for f, tok in script if tok == "wave")
+        # — Arme la cinématique : bandes + titre + compteur de vagues. —
+        self._cine_active = True
+        self._cine_t = 0
+        self._cine_dur = dur + 64          # marge pour la sortie des bandes
+        self._cine_name = self._SPECIALS["combo"]
+        self._cine_wave = 0
+        self._cine_waves = waves
+        self.emitter = dict(kind="combo", t=0, dur=dur, idx=0, recover=48,
+                            script=script)
+
+    def _combo_fire(self, tok, player, beams, projectiles, rings, telegraphs, particles):
+        col, col2 = _AEGIS_COL_DARK, _AEGIS_COL_DARK2
+        if tok == "wave":
+            # Nouvelle vague : pulse dramatique + avance le compteur du letterbox.
+            self._cine_wave = min(self._cine_waves, self._cine_wave + 1)
+            self.game.flash(col2, 6)
+            self.game.add_shake(12, 14)
+            self._cast_flourish(col2, 20)
+            burst(particles, self.x, self.y, 30, col2, 7.8, 38, 0.0, 5)
+            return
+        if tok == "starfall":
+            self._atk_starfall(player, projectiles, telegraphs, particles,
+                               count=13 + self.phase, dmg=2, gap=200, color=col)
+        elif tok == "shotgun":
+            self._atk_shotgun(player, projectiles, telegraphs, n=9 + self.phase // 2,
+                              spread=0.98, speed=7.3, dmg=2, color=col2)
+        elif tok == "implosion":
+            self._atk_implosion(player, projectiles, telegraphs, particles,
+                                count=30 + 3 * self.phase, speed=5.2, color=col)
+        elif tok == "nova":
+            self._atk_nova(player, projectiles, rings, telegraphs, particles,
+                           dmg=3, color=col2)
+        elif tok == "wall":
+            self._atk_wall(player, projectiles, telegraphs, particles,
+                           n_gaps=2, gap_w=175, dmg=3, dur=66)
+        elif tok == "swarm":
+            self._atk_swarm(player, projectiles, n=5 + self.phase // 2, dmg=2,
+                            homing=0.13, color=col2)
+        elif tok == "corrosion":
+            self._atk_corrosion(player, projectiles, telegraphs, particles,
+                                n=3, dmg=1)
+        elif tok == "corrupt":
+            self._atk_corrupt_world(player, projectiles, telegraphs, particles,
+                                    n=2, dur=420)
+        elif tok == "blink":
+            # Aegis se téléporte EN PLEINE cinématique : cadrage dynamique.
+            self._atk_blinkbeam(player, projectiles, telegraphs, particles)
+        self.game.add_shake(7, 9)
+        self._cast_flourish(col2, 13)     # pulsation visible à chaque maillon
+
+    # ── Annonce + flourish : « VOIR » les attaques spéciales ───────────────
+    _SPECIALS = {
+        "shotgun":   "SALVE DIVINE",
+        "starfall":  "PLUIE DE COMÈTES",
+        "wall":      "LA HERSE DU NÉANT",
+        "nova":      "SUPERNOVA",
+        "swarm":     "ESSAIM DU VIDE",
+        "blink":     "LE TRAIT DU NÉANT",
+        "implosion": "L'IMPLOSION DU NÉANT",
+        "lasers":    "LES AIGUILLES DU JUGEMENT",
+        "summon":    "LES LÉGIONS DU VIDE",
+        "spiral":    "SPIRALE BRISÉE",
+        "dspiral":   "HÉLICE MAUDITE",
+        "corrupt":   "LA CORRUPTION DU MONDE",
+        "corrosion": "LA CORROSION DU VIDE",
+        "combo":     "L'ENCHAÎNEMENT DIVIN",
+    }
+    _HEAVY = {"lasers", "summon", "implosion", "blink", "corrupt",
+              "corrosion", "combo", "nova"}
+    # Les composites « maison » pointent vers le nom canonique d'enchaînement ;
+    # rings/sweep restent des attaques de base (sans bandeau).
+    _ALIAS = {"combo_ws": "combo", "combo_rs": "combo", "combo_full": "combo",
+              "collapse": "combo", "sweep2": "sweep"}
+    # Réplique du dieu lancée AVEC l'attaque : on « entend » chaque spéciale.
+    _SPEC_LINES = {
+        "shotgun":   ["Reçois ma lumière.", "Aucun abri ne te protège."],
+        "starfall":  ["Le ciel te juge.", "Cours — le ciel s'effondre."],
+        "wall":      ["Trouve la faille. Vite.", "Une seule porte dans le Néant."],
+        "nova":      ["RECULE.", "Tout s'embrase d'un souffle."],
+        "swarm":     ["Mes yeux te traquent.", "Ils ne lâcheront pas ta trace."],
+        "blink":     ["Trop lent pour me suivre.", "Je suis déjà sur toi."],
+        "implosion": ["Le piège se referme.", "Une issue. Trouve-la, insecte."],
+        "lasers":    ["Ma puissance n'a pas de limite.", "Que le jugement tourne."],
+        "summon":    ["Mes légions ont faim.", "Tu n'es jamais seul devant moi."],
+        "spiral":    ["Danse dans ma spirale.", "Tourne, petite chose."],
+        "dspiral":   ["Deux hélices, aucune fuite.", "Le vertige du Néant."],
+        "corrupt":   ["Ce monde m'appartient.", "Je reprends ce qui est mien.",
+                      "Plus aucun sol pour les insectes."],
+        "corrosion": ["Le sol te dévore.", "Ta chair fond comme le reste.",
+                      "Rien ne demeure pur sous moi."],
+        "combo":     ["Assez joué. MEURS.", "Voilà ce qu'est un dieu.",
+                      "Encaisse. TOUT."],
+    }
+
+    def _announce(self, tok):
+        tok = self._ALIAS.get(tok, tok)
+        # On N'AFFICHE PLUS le nom des attaques à l'écran (demande joueur) :
+        # seuls les titres de cinématique (COURROUX, NÉMÉSIS) restent. On garde
+        # par contre les répliques/taunts du dieu ci-dessous.
+        lines = self._SPEC_LINES.get(tok)
+        if lines and hasattr(self.game, "set_subtitle"):
+            self.game.set_subtitle(random.choice(lines), 80)
+        if tok in self._HEAVY:
+            self._cast_flourish(self._form_color(), 26)
+
+    def _cast_flourish(self, color, frames=22):
+        self._cast_anim = max(self._cast_anim, frames)
+        self._cast_col = color
+
     # ── Interface combat ───────────────────────────────────────────────────
     def display_bar_fraction(self):
         if self.state == "intro":
@@ -3592,6 +4725,7 @@ class AegisBoss:
 
     def take_dmg(self, dmg, current_dim, particles):
         if self.state in ("intro", "transition"): return 0
+        if self.finale_active: return 0          # FINALE : on ne le tue pas en tapant
         if self.invuln_t > 0: return 0
         if self.final_blow_active: return 0
         self.hp -= dmg
@@ -3650,6 +4784,10 @@ class AegisBoss:
         vis = self.vis
         pulse = 0.75 + 0.25 * math.sin(self.bob_t * 1.5)
 
+        # ── Mares de corrosion : nappes au sol, derrière tout le reste ───────
+        for pool in self.pools:
+            pool.draw(surf, cam)
+
         # ── Lasers Horloge : dessinés derrière Aegis (ils émanent de lui) ────
         for L in self.lasers:
             L.draw(surf, cam)
@@ -3700,6 +4838,31 @@ class AegisBoss:
             pygame.draw.circle(gs, (*glow_col, aa), (vis, vis), rr)
         surf.blit(gs, (cx - vis, cy - vis), special_flags=pygame.BLEND_RGBA_ADD)
 
+        # ── Flourish de canalisation : Aegis « charge » une attaque lourde ───
+        # Halo qui se contracte + éclats qui convergent : un tell clair de dieu.
+        if self._cast_anim > 0:
+            # fr borné à 1.0 : un flourish long (combo) tient à pleine intensité
+            # puis s'estompe sur les 24 dernières frames — sinon l'alpha déborde
+            # de [0,255] et pygame plante (ValueError couleur).
+            fr = min(1.0, self._cast_anim / 24.0)
+            col = self._cast_col
+            for k in range(3):
+                rr = int(vis * (1.7 - k * 0.3) * (0.55 + 0.7 * fr))
+                if rr <= 2: continue
+                cs = pygame.Surface((rr * 2 + 4, rr * 2 + 4), pygame.SRCALPHA)
+                pygame.draw.circle(cs, (*col, int(120 * fr)), (rr + 2, rr + 2), rr, 3)
+                surf.blit(cs, (cx - rr - 2, cy - rr - 2),
+                          special_flags=pygame.BLEND_RGBA_ADD)
+            nseg = 8
+            base = self._anim_t * 0.25
+            rad = int(vis * (1.5 - 0.7 * fr))
+            for i in range(nseg):
+                a = base + i * math.tau / nseg
+                ex = int(cx + math.cos(a) * rad); ey = int(cy + math.sin(a) * rad)
+                seg = pygame.Surface((10, 10), pygame.SRCALPHA)
+                pygame.draw.circle(seg, (*col, int(200 * fr)), (5, 5), 4)
+                surf.blit(seg, (ex - 5, ey - 5), special_flags=pygame.BLEND_RGBA_ADD)
+
         # Choix de la planche recolorisée selon la forme
         if form == 'dark':
             sheet = getattr(self.game, '_aegis_sheet_dark', None) \
@@ -3722,11 +4885,11 @@ class AegisBoss:
             jit = int(math.sin(self._anim_t * 1.7) * 2) if form == 'dark' else 0
             scaled = pygame.transform.scale(frame, (vis * 2, vis * 2)).copy()
 
-            # Flash blanc quand touché
+            # Flash blanc quand touché — BLEND_RGB_ADD éclaircit uniquement les
+            # pixels du sprite (alpha préservé) : plus de carré blanc autour.
             if self.hit_flash > 0:
-                wf = pygame.Surface(scaled.get_size(), pygame.SRCALPHA)
-                wf.fill((255, 255, 255, 120))
-                scaled.blit(wf, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+                add = min(210, self.hit_flash * 26)
+                scaled.fill((add, add, add, 0), special_flags=pygame.BLEND_RGB_ADD)
             # Dissolution en mourant
             if self.dead:
                 scaled.set_alpha(max(0, 255 - int(self.death_t * 3)))
@@ -4053,6 +5216,11 @@ class Game:
         self.announce_t = 0
         self.announce_max = 110
 
+        # Bandeau « nom d'attaque » : on VOIT les attaques spéciales d'Aegis
+        self.callout_text = ""
+        self.callout_t = 0
+        self.callout_max = 1
+
         self.show_controls_popup = False
         self.title_pulse_t = 0
         self.start_btn_rect = pygame.Rect(0, 0, 0, 0)  # mis à jour dans draw_title
@@ -4065,6 +5233,9 @@ class Game:
         self.aegis_unlocked = False
         self.fighting_aegis = False
         self.aegis_ending_t = 0
+        self.finale_gauge = 0.0   # jauge « ?! » de la VRAIE fin (se remplit en survivant)
+        self.finale_done = False  # vrai une fois le texte final affiché (débloque [R])
+        self._skip_charge = 0.0   # spam Espace/Entrée pour passer une cinématique
         self.p5_cinematic_t = 0   # >0 while phase-5 intro plays (180 frames total)
 
         self.god_mode = False
@@ -4335,6 +5506,8 @@ class Game:
     def start_aegis_fight(self):
         """Lance directement le combat final Aegis (7 phases)."""
         self.aegis_dialog_active = False
+        self.finale_gauge = 0.0
+        self.finale_done = False
         self.fighting_aegis = True
         self.aegis_ending_t = 0
         self.shield_unlocked = True   # toutes les compétences dispo pour ce combat
@@ -4350,7 +5523,14 @@ class Game:
         self.post_dr_dialog_t = 0
         self.final_blow_dialog_t = 0
         self.platforms, spawn = make_moon_arena()
+        # Contre AEGIS, la « Fissure » (switch de dimension) n'existe pas : c'est la
+        # mécanique signature de la LUNE. On fige le héros en RÉALITÉ et on rend
+        # toutes les plateformes visibles (sinon les plateformes-rêve seraient mortes).
+        for _p in self.platforms:
+            _p.dim_only = None
         self.player = Player(*spawn)
+        self.player.can_swap = False
+        self.player.dimension = DIM_REAL
         self.boss = AegisBoss(640, 360, self)
         self.cam = [0, 0]
         self.state = STATE_MOON
@@ -4364,6 +5544,832 @@ class Game:
         self.ability_shield_t = 0
         self.ability_shield_cd = 0
         self._play_music("boss_moon.mp3", fadein_ms=2000)
+
+    def _boss_cine_kind(self):
+        """Renvoie la cinématique-attaque scriptée active : 'nemesis', 'courroux' ou None."""
+        b = self.boss
+        if not isinstance(b, AegisBoss):
+            return None
+        if getattr(b, "nemesis_active", False):
+            return "nemesis"
+        if getattr(b, "courroux_active", False):
+            return "courroux"
+        return None
+
+    def _finale_cine(self):
+        """Vrai pendant un acte CINÉMATIQUE de la FINALE (gel de l'input).
+        L'acte « survival » N'EST PAS gelé : le héros doit pouvoir esquiver."""
+        b = self.boss
+        return bool(isinstance(b, AegisBoss) and getattr(b, "finale_active", False)
+                    and b.finale_act != "survival")
+
+    def _finale_survival(self):
+        """Vrai pendant la SURVIE de la finale (esquive jouable, pouvoirs coupés)."""
+        b = self.boss
+        return bool(isinstance(b, AegisBoss) and getattr(b, "finale_active", False)
+                    and b.finale_act == "survival")
+
+    def _input_locked(self):
+        """Gameplay gelé pendant une cinématique non-interactive (NÉMÉSIS, COURROUX, ENTRÉE, FINALE)."""
+        if self._boss_cine_kind() is not None:
+            return True
+        if self._finale_cine():
+            return True
+        if (self.boss and isinstance(self.boss, AegisBoss)
+                and getattr(self.boss, "state", "") == "intro"):
+            return True
+        return False
+
+    def _skippable(self):
+        """Cinématique NON-jouable en cours, qu'on peut passer (spam Espace/Entrée).
+        La survie de la finale (jouable) n'en fait PAS partie."""
+        b = self.boss
+        if not isinstance(b, AegisBoss):
+            return None
+        if getattr(b, "nemesis_active", False):  return "nemesis"
+        if getattr(b, "courroux_active", False): return "courroux"
+        if getattr(b, "finale_active", False) and b.finale_act != "survival": return "finale"
+        if getattr(b, "state", "") == "intro":   return "intro"
+        return None
+
+    def _skip_cinematic(self):
+        """Passe la cinématique en cours (saute à sa fin / à l'acte suivant)."""
+        b = self.boss; kind = self._skippable()
+        if kind == "intro":
+            b.intro_t = 9999                          # prochain tick → "fighting"
+        elif kind == "nemesis":
+            b.nemesis_t = b.nemesis_dur - 1           # prochain tick → bloc de fin
+        elif kind == "courroux":
+            if not b._cx_hp_set:                      # applique la frappe si pas faite
+                self.player.hp = max(1, self.player.hp - max(2, self.player.max_hp // 2))
+                b._cx_hp_set = True
+            b.courroux_t = b.courroux_dur - 1
+        elif kind == "finale":
+            act = b.finale_act
+            if act == "prelude":
+                b.finale_act = "dialogue"; b.finale_t = 0
+            elif act == "dialogue":
+                b.finale_act = "survival"; b.finale_t = 0
+                b.finale_fire_t = 0; self.finale_gauge = 0.0
+                self.player.invuln = max(self.player.invuln, 40)
+            elif act == "timestop":
+                if not b._fin_cut:                    # applique la coupe si pas faite
+                    b._fin_cut = True; b.dead = True; b.death_t = 999
+                    self.projectiles_boss[:] = []; self.beams[:] = []; self.rings[:] = []
+                b.finale_t = 2040                     # prochain tick → "ending"
+            elif act == "ending":
+                b.finale_t = 902; self.finale_done = True
+
+    def _skip_press(self):
+        """Une pression Espace/Entrée pendant une cinématique → charge le skip."""
+        if not self._skippable():
+            return
+        self._skip_charge += 38.0
+        if self._skip_charge >= 100.0:
+            self._skip_charge = 0.0
+            self._skip_cinematic()
+
+    def _draw_skip_hint(self):
+        """Indice + jauge de spam pour passer la cinématique."""
+        if not self._skippable():
+            return
+        W, H = WIDTH, HEIGHT
+        s = self.font_sm.render("Espace / Entrée : passer  >>", True, (210, 210, 222))
+        s.set_alpha(165)
+        r = s.get_rect(bottomright=(W - 20, H - 16))
+        self.screen.blit(s, r)
+        pygame.draw.rect(self.screen, (50, 26, 44), (r.left, r.bottom + 3, 130, 4))
+        if self._skip_charge > 0:
+            bw = int(130 * min(1.0, self._skip_charge / 100.0))
+            pygame.draw.rect(self.screen, (255, 120, 200), (r.left, r.bottom + 3, bw, 4))
+
+    def _finale_activate_skill(self):
+        """Le héros déclenche « ?! » : LE TEMPS S'ARRÊTE → exécution du dieu."""
+        b = self.boss
+        if not self._finale_survival() or self.finale_gauge < 1.0:
+            return
+        b._fin_hero0 = self.player.rect.center      # point de départ du saut fatal
+        b.finale_act = "timestop"
+        b.finale_t = 0
+        b._fin_cut = False
+        self._fin_trail = []                        # après-images du héros
+        self.flash((200, 220, 255), 16)             # onde de gel
+        # Les projectiles restent SUSPENDUS (le temps gèle) : update_moon ne les
+        # fait plus avancer pendant l'acte time-stop.
+
+    def _update_finale_cine(self):
+        """Pilote les actes CINÉMATIQUES de la finale : prélude → dialogue →
+        time-stop (exécution) → fin. La SURVIE, elle, tourne en gameplay normal."""
+        b = self.boss
+        b.finale_t += 1
+        t = b.finale_t
+        act = b.finale_act
+        self.cam = [0, 0]
+        b.bob_t += 0.04
+        b._anim_t += 1                       # le sprite reste animé pendant les actes
+        b.float_offset = math.sin(b.bob_t) * 10
+        self.player.invuln = max(self.player.invuln, 8)
+        # Braises ascendantes autour du dieu (ambiance), sauf après la coupe.
+        if act in ("dialogue",) and t % 5 == 0 and not b._fin_cut:
+            burst(self.particles, b.x + random.randint(-b.vis // 2, b.vis // 2),
+                  b.y + random.randint(-20, b.vis // 2), 1, _AEGIS_COL_DARK2, 1.3, 60, -0.03, 3)
+        for part in self.particles: part.update()
+        self.particles[:] = [p for p in self.particles if p.alive()]
+        if self.announce_t > 0: self.announce_t -= 1
+        if self.flash_t > 0: self.flash_t -= 1
+        if self.subtitle_t > 0: self.subtitle_t -= 1
+        if self.callout_t > 0: self.callout_t -= 1
+        self.starfield.update(); self.dust.update()
+
+        if act == "prelude":
+            # PHASE FISSURE (0→300) : formation lente et progressive, pas de flash
+            # brutal. Les étincelles ne commencent qu'à l'arrachage (t>300).
+            if t == 1:
+                self.flash((30, 4, 22), 10)         # léger assombrissement, pas de flash blanc
+            if t > 300 and t % 6 == 0:
+                burst(self.particles, b.x + random.randint(-70, 70), b.y + random.randint(-50, 50),
+                      3, _AEGIS_COL_DARK2, 3.0, 42, 0.0, 4)
+            if t >= 840:
+                b.finale_act = "dialogue"; b.finale_t = 0
+
+        elif act == "dialogue":
+            if t % 9 == 0:
+                burst(self.particles, random.randint(0, WIDTH), random.randint(0, HEIGHT),
+                      1, _AEGIS_COL_VOID, 0.8, 55, 0.0, 3)
+            if t >= 1140:
+                b.finale_act = "survival"; b.finale_t = 0
+                b.finale_fire_t = 0
+                self.finale_gauge = 0.0
+                self.player.invuln = max(self.player.invuln, 40)
+
+        elif act == "timestop":
+            # CINÉMATIQUE D'EXÉCUTION (~34 s) : gel → ascension → effroi → charge
+            # → GRAND SLASH (slow-mo) → coupe → dérive.
+            #   B_RISE  : le héros atteint sa position haute (lame brandie)
+            #   B_SLASH : début du slash · B_CUT : impact · B_END : → fin
+            B_RISE, B_SLASH, B_CUT, B_END = 600, 1440, 1560, 2040
+            hx0, hy0 = getattr(b, "_fin_hero0", (640, 540))
+            up = (b.x - 60, b.y - 150)              # position haute (lame levée)
+            dn = (b.x + 60, b.y + 205)              # position basse (après le slash)
+            if t <= B_RISE:                         # ASCENSION lente et solennelle
+                u = max(0.0, min(1.0, (t - 150) / float(B_RISE - 150))); ue = u * u * (3 - 2 * u)
+                tx = hx0 + (up[0] - hx0) * ue
+                ty = hy0 + (up[1] - hy0) * ue - math.sin(ue * math.pi) * 90
+                self.player.rect.center = (int(tx), int(ty))
+            elif t < B_SLASH:                       # WIND-UP / CHARGE (long, flottant)
+                self.player.rect.center = (int(up[0]), int(up[1] + math.sin(t * 0.05) * 6))
+            elif t < B_CUT:                         # LE SLASH : plonge à travers le dieu
+                u = (t - B_SLASH) / float(B_CUT - B_SLASH); ue = u * u * u
+                self.player.rect.center = (int(up[0] + (dn[0] - up[0]) * ue),
+                                           int(up[1] + (dn[1] - up[1]) * ue))
+            else:
+                self.player.rect.center = (int(dn[0]), int(dn[1]))
+            self.player.invuln = 999
+            if 150 <= t < B_CUT and t % 2 == 0:     # mémorise la traînée
+                self._fin_trail.append(self.player.rect.center)
+                if len(self._fin_trail) > 18:
+                    self._fin_trail.pop(0)
+            # CHARGE (600→1440) : énergie aspirée + le DIEU tremble de plus en plus.
+            if B_RISE < t < B_SLASH:
+                ch = (t - B_RISE) / float(B_SLASH - B_RISE)
+                if t % 2 == 0:
+                    ang = random.uniform(0, math.tau); d = random.uniform(150, 430)
+                    hx = self.player.rect.centerx; hy = self.player.rect.centery - 130
+                    self.particles.append(Particle(hx + math.cos(ang) * d, hy + math.sin(ang) * d,
+                        -math.cos(ang) * 2.8, -math.sin(ang) * 2.8, random.randint(16, 30),
+                        _AEGIS_COL_DARK2, 3, 0.0))
+                amp = 2 + ch * 9                        # tremblement croissant du dieu
+                b.float_offset += random.uniform(-amp, amp)
+                if t % 30 == 0:                         # éclats arrachés au dieu
+                    burst(self.particles, b.x + random.randint(-90, 90), b.y + random.randint(-90, 60),
+                          6, _AEGIS_COL_DARK, 4.0 + 4 * ch, 30, 0.0, 4)
+            # L'IMPACT : le slash connecte → Aegis coupé en deux.
+            if t == B_CUT and not b._fin_cut:
+                b._fin_cut = True
+                b.dead = True; b.death_t = 999          # cache le sprite normal
+                self.projectiles_boss[:] = []; self.beams[:] = []; self.rings[:] = []
+                self.flash((255, 255, 255), 36)
+                burst(self.particles, b.x, b.y, 230, (255, 255, 255), 14.5, 86, 0.0, 8)
+                burst(self.particles, b.x, b.y, 150, _AEGIS_COL_DARK, 11.0, 74, 0.0, 6)
+                burst(self.particles, b.x, b.y, 100, _AEGIS_COL_VOID, 8.5, 66, 0.0, 6)
+            # APRÈS LA COUPE : les deux moitiés se DISSOLVENT en braises ascendantes.
+            if b._fin_cut and t % 2 == 0:
+                sep = (t - B_CUT) * 1.2
+                for sgn in (-1, 1):
+                    ex = b.x + sgn * sep + random.randint(-50, 50)
+                    ey = b.y + random.randint(-b.vis // 2, b.vis // 2)
+                    self.particles.append(Particle(ex, ey, sgn * random.uniform(0.3, 1.6),
+                        -random.uniform(0.6, 2.2), random.randint(30, 60),
+                        random.choice((_AEGIS_COL_DARK2, (255, 230, 250))), 3, -0.02))
+            if t >= B_END:
+                b.finale_act = "ending"; b.finale_t = 0
+
+        elif act == "ending":
+            if t == 1:
+                self.player.score += 10000
+            # Le héros erre lentement dans le néant.
+            self.player.rect.centerx = 640 + int(150 * math.sin(t * 0.011))
+            if t % 11 == 0:
+                burst(self.particles, random.randint(0, WIDTH), random.randint(0, HEIGHT),
+                      1, _AEGIS_COL_VOID, 0.6, 60, 0.0, 3)
+            if t >= 900:
+                self.finale_done = True      # débloque [R] pour revenir au titre
+
+    # ── FINALE : rendu complet (le décor EST le néant) ──────────────────────
+    def _draw_finale_world(self):
+        b = self.boss; scr = self.screen; cam = self.cam; fr = self.frame
+        # ── DAIS d'obsidienne flottant (seule la dalle principale est dessinée ;
+        #    les parois sont des colliders invisibles). ──
+        if self.platforms:
+            slab = self.platforms[0].rect
+            sx = int(slab.x - cam[0]); sy = int(slab.y - cam[1])
+            ug = pygame.Surface((slab.w + 260, 150), pygame.SRCALPHA)
+            pygame.draw.ellipse(ug, (150, 24, 116, 60), (0, 0, slab.w + 260, 150))
+            scr.blit(ug, (sx - 130, sy + 24), special_flags=pygame.BLEND_RGBA_ADD)
+            for k in range(slab.h):                          # corps en dégradé
+                f = k / max(1, slab.h)
+                col = (int(20 - 14 * f), int(9 - 6 * f), int(30 - 18 * f))
+                pygame.draw.line(scr, col, (sx, sy + k), (sx + slab.w, sy + k))
+            for fxp in range(sx + 70, sx + slab.w - 50, 120):  # veines de lumière
+                pygame.draw.line(scr, (120, 28, 88), (fxp, sy + 10),
+                                 (fxp + 16, sy + slab.h - 8), 1)
+            glow = max(0, min(255, int(190 + 60 * math.sin(fr * 0.08))))
+            pygame.draw.line(scr, (255, 90, 200), (sx, sy), (sx + slab.w, sy), 3)
+            pygame.draw.line(scr, (255, 210, 240, glow)[:3], (sx, sy + 1), (sx + slab.w, sy + 1), 1)
+        # Projectiles : les MÉTÉORITES de la survie ont leur propre rendu.
+        for proj in self.projectiles_boss:
+            if getattr(proj, "kind", "") == "meteor":
+                self._draw_meteor(scr, proj.x - cam[0], proj.y - cam[1], proj.radius * 1.15,
+                                  fr, getattr(proj, "vx", 0.0), getattr(proj, "vy", 1.0))
+            else:
+                proj.draw(scr, cam)
+        for rg in self.rings: rg.draw(scr, cam)
+        # Aegis — rendu DÉDIÉ (splat-art net, pas le halo délavé du combat).
+        if not (b.dead and b.death_t > 90):
+            self._draw_finale_aegis(scr, int(b.x - cam[0]), int(b.y + b.float_offset - cam[1]))
+        # Héros (toujours solide, jamais clignotant).
+        if self.player:
+            _sav = self.player.invuln; self.player.invuln = 0
+            self.player.draw(scr, cam); self.player.invuln = _sav
+        for part in self.particles: part.draw(scr, cam)
+        self._draw_finale()
+
+    def _draw_finale_aegis(self, scr, cx, cy):
+        """Rendu DÉDIÉ d'Aegis dans le néant : le vrai splat-art, NET, sublimé
+        (nébuleuse douce + aiguilles de lumière + yeux-étoiles), sans le halo
+        délavé du combat qui le blanchissait."""
+        b = self.boss; vis = b.vis; fr = self.frame
+        # 1) Halo doux en DÉGRADÉ lisse (auréole contenue, pas un disque plat).
+        side = vis * 4; c = side // 2
+        neb = pygame.Surface((side, side), pygame.SRCALPHA)
+        for k in range(18):
+            rr = int(vis * (1.95 - k * 0.10))
+            if rr <= 0: continue
+            pygame.draw.circle(neb, (120, 16, 96, 4), (c, c), rr)
+        scr.blit(neb, (cx - c, cy - c), special_flags=pygame.BLEND_RGBA_ADD)
+        # 2) Fines aiguilles de lumière rayonnant derrière (le « soleil noir »).
+        n = 16
+        for i in range(n):
+            a = i * math.tau / n + b.bob_t * 0.12
+            l1 = vis * 0.95; l2 = vis * (1.5 + 0.12 * math.sin(b.bob_t * 1.1 + i))
+            pygame.draw.line(scr, (190, 46, 142),
+                             (int(cx + math.cos(a) * l1), int(cy + math.sin(a) * l1)),
+                             (int(cx + math.cos(a) * l2), int(cy + math.sin(a) * l2)), 2)
+        # 3) LE SPRITE splat-art (forme dark), NET.
+        sheet = getattr(self, "_aegis_sheet_dark", None) or getattr(self, "_aegis_sheet", None)
+        if sheet:
+            fw = self._aegis_frame_w; nf = max(1, sheet.get_width() // fw)
+            fi = (b._anim_t // 4) % nf
+            try:
+                frame = sheet.subsurface((fi * fw, 0, fw, sheet.get_height()))
+            except Exception:
+                frame = sheet.subsurface((0, 0, fw, sheet.get_height()))
+            scaled = pygame.transform.scale(frame, (vis * 2, vis * 2))
+            scr.blit(scaled, (cx - vis, cy - vis))
+        else:
+            pygame.draw.circle(scr, _AEGIS_COL_DARK, (cx, cy), b.radius)
+        # 4) Yeux-étoiles ROUGES (alignés sur le visage, comme COURROUX).
+        eyo = int(vis * 0.28)
+        er = 11 + 4 * math.sin(fr * 0.3)
+        for sgn in (-1, 1):
+            self._blit_star(scr, cx + sgn * eyo, cy - eyo, er * 2.2, er * 0.9,
+                            (255, 30, 30), glow=(255, 90, 60), a=235, rot=fr * 0.04)
+
+    def _draw_god_halves(self, scr, cx, cy, sep, alpha=255):
+        """Coupe le SPRITE splat-art en deux moitiés qui s'écartent (vrai dieu
+        tranché, pas de vagues ellipses)."""
+        vis = self.boss.vis
+        sheet = getattr(self, "_aegis_sheet_dark", None) or getattr(self, "_aegis_sheet", None)
+        if not sheet:
+            return
+        try:
+            frame = sheet.subsurface((0, 0, self._aegis_frame_w, sheet.get_height()))
+        except Exception:
+            return
+        scaled = pygame.transform.scale(frame, (vis * 2, vis * 2))
+        lh = scaled.subsurface((0, 0, vis, vis * 2)).copy()
+        rh = scaled.subsurface((vis, 0, vis, vis * 2)).copy()
+        a = max(0, min(255, int(alpha)))
+        lh.set_alpha(a); rh.set_alpha(a)
+        scr.blit(lh, (cx - vis - sep, cy - vis))
+        scr.blit(rh, (cx + sep, cy - vis))
+
+    def _taper_poly(self, spine, base_w, tip_w):
+        """Construit un polygone EFFILÉ qui suit une courbe (spine) : largeur
+        base_w à la base → tip_w à la pointe. Donne des serres organiques."""
+        n = len(spine)
+        if n < 2: return [(int(x), int(y)) for x, y in spine]
+        top = []; bot = []
+        for i in range(n):
+            x, y = spine[i]
+            u = i / (n - 1.0)
+            w = base_w * (1 - u) + tip_w * u
+            if i < n - 1: dx, dy = spine[i + 1][0] - x, spine[i + 1][1] - y
+            else:         dx, dy = x - spine[i - 1][0], y - spine[i - 1][1]
+            d = math.hypot(dx, dy) or 1.0
+            nx, ny = -dy / d, dx / d
+            top.append((x + nx * w, y + ny * w)); bot.append((x - nx * w, y - ny * w))
+        return [(int(x), int(y)) for x, y in (top + bot[::-1])]
+
+    def _draw_claw_hand(self, surf, tipx, cy, dirx, scale=1.0):
+        """GRIFFE colossale d'Aegis : 4 grosses serres COURBES (crochets) émergeant
+        du bord, reliées par une racine sombre, qui agrippent la couture en tipx.
+        Remplissage VISIBLE + fort rétro-éclairage + arêtes & pointes dorées."""
+        s = scale
+        reach = int(370 * s)
+        root_x = int(tipx - dirx * reach)
+        rw = int(150 * s); rh = int(160 * s)
+        # Spines des 4 serres (crochets — Bézier qui s'incurvent vers la pointe).
+        spines = []
+        for i in range(4):
+            tt = (i - 1.5) / 1.5
+            b0 = (root_x + dirx * 26 * s, cy + tt * rh * 0.78)
+            tip = (tipx, cy + tt * 28 * s)
+            mid = (b0[0] + dirx * reach * 0.55, b0[1] + tt * 30 * s - 40 * s)  # crochet
+            sp = []
+            for k in range(11):
+                u = k / 10.0
+                qx = (1 - u) ** 2 * b0[0] + 2 * (1 - u) * u * mid[0] + u * u * tip[0]
+                qy = (1 - u) ** 2 * b0[1] + 2 * (1 - u) * u * mid[1] + u * u * tip[1]
+                sp.append((qx, qy))
+            spines.append(sp)
+        # 1) RÉTRO-ÉCLAIRAGE fort (halo magenta derrière la griffe).
+        gl = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        pygame.draw.ellipse(gl, (185, 30, 130, 95),
+                            (root_x - dirx * rw - (rw if dirx < 0 else 0), cy - rh, rw * 2, rh * 2))
+        for sp in spines:
+            pygame.draw.lines(gl, (200, 36, 140, 90), False,
+                              [(int(x), int(y)) for x, y in sp], max(10, int(24 * s)))
+        surf.blit(gl, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+        # 2) RACINE sombre (le poignet d'où sortent les serres).
+        root = [(root_x - dirx * rw, cy - rh), (root_x + dirx * 30 * s, cy - rh * 0.7),
+                (root_x + dirx * 30 * s, cy + rh * 0.7), (root_x - dirx * rw, cy + rh)]
+        pygame.draw.polygon(surf, (40, 13, 32), root)
+        pygame.draw.polygon(surf, (205, 46, 128), root, 3)
+        # 3) Les SERRES : remplissage visible + arête vive + pointe dorée.
+        for sp in spines:
+            poly = self._taper_poly(sp, int(32 * s), 2)
+            pygame.draw.polygon(surf, (50, 16, 38), poly)                 # chair VISIBLE
+            pygame.draw.polygon(surf, (214, 50, 134), poly, max(2, int(3 * s)))
+            pygame.draw.lines(surf, (255, 124, 206), False,              # reflet sur l'arête
+                              [(int(x), int(y)) for x, y in sp], max(1, int(2 * s)))
+            pygame.draw.lines(surf, (248, 206, 116), False,             # pointe dorée
+                              [(int(x), int(y)) for x, y in sp[-4:]], max(3, int(7 * s)))
+
+    def _draw_finale(self):
+        act = self.boss.finale_act
+        if act == "prelude":    self._draw_finale_prelude()
+        elif act == "dialogue": self._draw_finale_dialogue()
+        elif act == "survival": self._draw_finale_survival()
+        elif act == "timestop": self._draw_finale_timestop()
+        elif act == "ending":   self._draw_finale_ending()
+
+    def _fin_textbox(self, speaker_col, txt, alpha=255, speaker=None):
+        """Boîte de dialogue lisible en bas (caisson + ombre + nom + fondu)."""
+        scr = self.screen; W, H = WIDTH, HEIGHT
+        alpha = max(0, min(255, int(alpha)))
+        if alpha <= 0: return
+        s = self.font_med.render(txt, True, speaker_col)
+        sh = self.font_med.render(txt, True, (14, 2, 22))
+        bw = s.get_width() + 64; bh = s.get_height() + 28
+        box = pygame.Surface((bw, bh), pygame.SRCALPHA)
+        box.fill((6, 1, 12, int(210 * alpha / 255)))
+        pygame.draw.rect(box, (150, 28, 104, alpha), box.get_rect(), 2)
+        br = box.get_rect(center=(W // 2, H - 74)); scr.blit(box, br)
+        if speaker:
+            nm = self.font_sm.render(speaker, True, (255, 110, 200))
+            nm.set_alpha(alpha)
+            scr.blit(nm, nm.get_rect(midleft=(br.left + 6, br.top - 12)))
+        s.set_alpha(alpha); sh.set_alpha(alpha)
+        r = s.get_rect(center=(W // 2, H - 74))
+        scr.blit(sh, (r.x + 2, r.y + 2)); scr.blit(s, r)
+
+    def _draw_finale_prelude(self):
+        scr = self.screen; W, H = WIDTH, HEIGHT; t = self.boss.finale_t
+
+        def ease(u):
+            u = 0.0 if u < 0 else (1.0 if u > 1 else u)
+            return u * u * u * (u * (u * 6 - 15) + 10)
+
+        TEAR = 300        # l'arrachage par les mains commence ici
+        OPEN = 560        # écart complet
+        if t < TEAR:   slide = 0.0
+        elif t < OPEN: slide = ease((t - TEAR) / float(OPEN - TEAR)) * (W / 2 + 140)
+        else:          slide = W / 2 + 160
+        seam_l = int(W / 2 - slide); seam_r = int(W / 2 + slide)
+        # Voiles (= l'ancien écran de fin, noir) qui s'écartent.
+        if slide < W / 2 + 150:
+            if seam_l + 12 > 0:
+                lv = pygame.Surface((seam_l + 12, H)); lv.fill((4, 1, 8)); scr.blit(lv, (0, 0))
+            if W - seam_r + 12 > 0:
+                rv = pygame.Surface((W - seam_r + 12, H)); rv.fill((4, 1, 8)); scr.blit(rv, (seam_r - 12, 0))
+            if t < 210:
+                a = max(0, int(190 * (1 - t / 210.0)))
+                s = self.font_med.render("...Incroyable.", True, (200, 160, 255)); s.set_alpha(a)
+                scr.blit(s, s.get_rect(center=(W // 2, H // 2)))
+        # Fissure DÉCHIQUETÉE incandescente (tracé stable + lueur en couches).
+        def _jag(xc, y0, y1, amp):
+            random.seed(int(xc) * 31 + 7)
+            pts = [(xc, y0)]; yy = y0 + 22
+            while yy < y1:
+                pts.append((int(xc + random.randint(-amp, amp)), yy)); yy += 22
+            pts.append((xc, y1)); random.seed()
+            return pts
+        if slide < 6:
+            # FORMATION PROGRESSIVE (0→TEAR) : naît d'un point, s'étire lentement.
+            prog = ease(t / float(TEAR))
+            gh = int(40 + 560 * prog); amp = int(3 + 14 * prog)
+            y0 = H // 2 - gh // 2; y1 = H // 2 + gh // 2
+            jag = _jag(W // 2, y0, y1, amp)
+            pygame.draw.lines(scr, (110, 8, 64), False, jag, max(5, int(12 * prog)))
+            pygame.draw.lines(scr, (255, 90, 205), False, jag, max(2, int(6 * prog)))
+            pygame.draw.lines(scr, (255, 244, 252), False, jag, max(1, int(3 * prog)))
+            if prog > 0.4:                          # ramifications qui apparaissent
+                random.seed(13)
+                for _ in range(int(7 * prog)):
+                    by_ = random.randint(y0, y1); bx_ = W // 2 + random.randint(-amp, amp)
+                    ba = random.choice((-1, 1))
+                    pygame.draw.line(scr, (255, 110, 215), (bx_, by_),
+                                     (bx_ + ba * int(46 * prog), by_ + random.randint(-22, 22)), 2)
+                random.seed()
+            for _ in range(int(7 * prog)):          # étincelles
+                sy = random.randint(y0, y1)
+                pygame.draw.circle(scr, (255, 185, 232),
+                                   (W // 2 + random.randint(-amp - 8, amp + 8), sy), random.randint(1, 3))
+            hr = int(18 + 86 * prog)                # halo central : la pression monte
+            hs = pygame.Surface((hr * 2 + 8, hr * 2 + 8), pygame.SRCALPHA)
+            pygame.draw.circle(hs, (180, 30, 130, int(64 * prog)), (hr + 4, hr + 4), hr)
+            scr.blit(hs, (W // 2 - hr - 4, H // 2 - hr - 4), special_flags=pygame.BLEND_RGBA_ADD)
+        elif seam_r > seam_l:
+            # L'écart révèle le néant : gerbe de lumière + bords déchiquetés ardents.
+            fl = pygame.Surface((seam_r - seam_l, H), pygame.SRCALPHA)
+            for k in range(0, H, 5):
+                pygame.draw.line(fl, (255, 120, 220, random.randint(12, 66)),
+                                 (0, k), (fl.get_width(), k), 2)
+            scr.blit(fl, (seam_l, 0), special_flags=pygame.BLEND_RGBA_ADD)
+            for seam in (seam_l, seam_r):
+                jag = _jag(seam, 0, H, 8)
+                pygame.draw.lines(scr, (110, 8, 64), False, jag, 9)
+                pygame.draw.lines(scr, (255, 110, 215), False, jag, 4)
+                pygame.draw.lines(scr, (255, 244, 252), False, jag, 1)
+        # LES MAINS du dieu : surgissent à l'arrachage pis tirent.
+        if TEAR - 40 <= t < 720:
+            self._draw_claw_hand(scr, seam_l, H // 2, +1, 1.0)
+            self._draw_claw_hand(scr, seam_r, H // 2, -1, 1.0)
+        # Cri d'Aegis (après l'ouverture).
+        if t >= 600:
+            a = min(255, int((t - 600) * 8))
+            if t > 780: a = max(0, 255 - int((t - 780) * 6))
+            if a > 0:
+                line = self.font_big.render("NON. On n'efface pas l'éternel.", True, (255, 50, 50))
+                sh = self.font_big.render("NON. On n'efface pas l'éternel.", True, (40, 0, 0))
+                line.set_alpha(a); sh.set_alpha(a)
+                r = line.get_rect(center=(W // 2, H // 2 - 150))
+                scr.blit(sh, (r.x + 3, r.y + 3)); scr.blit(line, r)
+        if t < 24:
+            fo = pygame.Surface((W, H)); fo.fill((0, 0, 0)); fo.set_alpha(int(255 * (1 - t / 24.0)))
+            scr.blit(fo, (0, 0))
+
+    def _draw_finale_dialogue(self):
+        """Dialogue en répliques SÉQUENTIELLES (plus de clignotement) avec fondu."""
+        t = self.boss.finale_t
+        MAG = (255, 160, 228); SIL = (215, 215, 235)
+
+        def beat(t0, t1, col, txt, speaker):
+            if not (t0 <= t < t1): return
+            a = 255
+            if t < t0 + 18: a = int(255 * (t - t0) / 18)
+            elif t > t1 - 20: a = int(255 * (t1 - t) / 20)
+            self._fin_textbox(col, txt, alpha=a, speaker=speaker)
+
+        # 6 répliques nettes, une à la fois (Aegis ↔ silence du héros).
+        beat(0,    200,  MAG, "Mon royaume. Ici, je suis TOUT.",                   "AEGIS")
+        beat(200,  430,  MAG, "Tu n'as plus rien. Plus d'arc, plus de rêve. Juste... toi.", "AEGIS")
+        beat(430,  610,  SIL, "« ... »",                                            None)
+        beat(610,  830,  MAG, "Pourquoi ce silence ?! DIS QUELQUE CHOSE !",         "AEGIS")
+        beat(830,  1000, SIL, "« ... »",                                            None)
+        beat(1000, 1140, MAG, "...Soit. Je vais te l'arracher.",                    "AEGIS")
+
+    def _draw_finale_survival(self):
+        scr = self.screen; W, H = WIDTH, HEIGHT; fr = self.frame
+        g = self.finale_gauge
+        # Vignette rouge pulsée (oppression du néant).
+        vg = pygame.Surface((W, H), pygame.SRCALPHA)
+        pygame.draw.rect(vg, (120, 0, 30, 70 + int(20 * math.sin(fr * 0.1))), (0, 0, W, H), 130)
+        scr.blit(vg, (0, 0))
+        # Réplique d'Aegis qui perd pied (selon la progression).
+        line = None
+        if g < 0.30:   line = "pourquoi... tu ne tombes pas ?"
+        elif g < 0.65: line = "qu'est-ce que tu ES ?!"
+        elif g < 0.95: line = "ARRÊTE de te relever !"
+        if line:
+            s = self.font_sm.render(line, True, (255, 140, 200))
+            scr.blit(s, s.get_rect(center=(W // 2, 70)))
+        # Jauge « ?! » en bas-centre.
+        bw, bh = 360, 22; bx = W // 2 - bw // 2; by = H - 64
+        pygame.draw.rect(scr, (8, 2, 12), (bx - 3, by - 3, bw + 6, bh + 6), border_radius=5)
+        fillw = int(bw * g)
+        col = (255, 90, 200) if g < 1.0 else (255, 230, 120)
+        if fillw > 0:
+            pygame.draw.rect(scr, col, (bx, by, fillw, bh), border_radius=4)
+        pygame.draw.rect(scr, (150, 40, 110), (bx, by, bw, bh), 2, border_radius=4)
+        if g < 1.0:
+            lab = self.font_sm.render("?!", True, (230, 180, 220))
+            scr.blit(lab, lab.get_rect(center=(W // 2, by - 18)))
+        else:
+            pulse = 0.5 + 0.5 * math.sin(fr * 0.25)
+            big = self.font_big.render("?!", True, (255, int(200 + 55 * pulse), 120))
+            scr.blit(big, big.get_rect(center=(W // 2, by - 40)))
+            hint = self.font_sm.render("[ CLIC ]", True, (255, int(180 + 60 * pulse), 120))
+            scr.blit(hint, hint.get_rect(center=(W // 2, by - 8)))
+
+    def _draw_meteor(self, scr, cx, cy, R, fr, vx=0.0, vy=1.0):
+        """Météorite (réutilisée de COURROUX) : traînée de feu + roche sombre +
+        rim incandescent crénelé."""
+        R = max(4, int(R)); cx = int(cx); cy = int(cy)
+        sp = math.hypot(vx, vy) or 1.0
+        tdx, tdy = -vx / sp, -vy / sp                # traînée à l'opposé du mouvement
+        for k in range(1, 7):
+            rr = max(2, int(R * (1 - k * 0.13)))
+            ts = pygame.Surface((rr * 2 + 4, rr * 2 + 4), pygame.SRCALPHA)
+            pygame.draw.circle(ts, (255, 120, 50, max(0, 120 - k * 18)), (rr + 2, rr + 2), rr)
+            scr.blit(ts, (int(cx + tdx * k * R * 0.7) - rr - 2, int(cy + tdy * k * R * 0.7) - rr - 2),
+                     special_flags=pygame.BLEND_RGBA_ADD)
+        ms = pygame.Surface((R * 4, R * 4), pygame.SRCALPHA); c = R * 2
+        for k in range(5):
+            pygame.draw.circle(ms, (255, 110, 40, max(0, 48 - k * 9)), (c, c), int(R * (1.55 - k * 0.16)))
+        for k in range(5):
+            pygame.draw.circle(ms, (38, 12, 16) if k == 0 else (74, 26, 30), (c, c), int(R * (1.0 - k * 0.16)))
+        gl = max(0, min(255, int(175 + 70 * math.sin(fr * 0.3))))
+        pygame.draw.circle(ms, (255, 150, 70, gl), (c, c), R, 3)
+        for i in range(10):
+            a = i * math.tau / 10 + fr * 0.04
+            pygame.draw.line(ms, (110, 40, 36),
+                             (c + int(math.cos(a) * R * 0.82), c + int(math.sin(a) * R * 0.82)),
+                             (c + int(math.cos(a) * R * 1.05), c + int(math.sin(a) * R * 1.05)), 2)
+        scr.blit(ms, (cx - c, cy - c))
+
+    def _draw_light_blade(self, scr, hx, hy, ang, L, glow=1.0):
+        """BELLE lame de lumière : garde dorée + lame effilée (cœur blanc, tranchant
+        lumineux), halo additif doux, pointe étincelante."""
+        W, H = WIDTH, HEIGHT
+        hx, hy = int(hx), int(hy)
+        cosA, sinA = math.cos(ang), math.sin(ang)
+        pxv, pyv = -sinA, cosA                       # perpendiculaire (largeur)
+        base = (hx + cosA * 20, hy + sinA * 20)      # juste après la garde
+        tip = (hx + cosA * L, hy + sinA * L)
+        midx, midy = hx + cosA * L * 0.5, hy + sinA * L * 0.5
+        # 1) HALO additif (doux, large).
+        gl = pygame.Surface((W, H), pygame.SRCALPHA)
+        gw = 7 + 9 * glow
+        pygame.draw.polygon(gl, (210, 60, 175, int(110 * glow)),
+                            [(base[0] + pxv * gw, base[1] + pyv * gw), tip,
+                             (base[0] - pxv * gw, base[1] - pyv * gw)])
+        scr.blit(gl, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+        # 2) CORPS de lame (losange effilé) blanc-rosé.
+        w = 4 + 2 * glow
+        body = [(base[0] + pxv * w, base[1] + pyv * w),
+                (midx + pxv * w * 0.7, midy + pyv * w * 0.7), tip,
+                (midx - pxv * w * 0.7, midy - pyv * w * 0.7),
+                (base[0] - pxv * w, base[1] - pyv * w)]
+        pygame.draw.polygon(scr, (255, 205, 242), [(int(x), int(y)) for x, y in body])
+        # 3) Tranchant + cœur blanc-chaud.
+        pygame.draw.line(scr, (255, 160, 225), (int(base[0] + pxv * w), int(base[1] + pyv * w)),
+                         (int(tip[0]), int(tip[1])), 1)
+        pygame.draw.line(scr, (255, 255, 255), (int(base[0]), int(base[1])),
+                         (int(tip[0]), int(tip[1])), 2)
+        # 4) GARDE dorée (crossguard) + pommeau.
+        g = 17
+        pygame.draw.line(scr, (245, 205, 120), (int(hx - pxv * g), int(hy - pyv * g)),
+                         (int(hx + pxv * g), int(hy + pyv * g)), 5)
+        pygame.draw.circle(scr, (245, 205, 120), (int(hx - cosA * 9), int(hy - sinA * 9)), 4)
+        # 5) Pointe étincelante (étoile).
+        pygame.draw.circle(scr, (255, 255, 255), (int(tip[0]), int(tip[1])), max(3, int(4 * glow)))
+        for k in range(4):
+            aa = ang + k * math.pi / 2; spk = 7 + 5 * glow
+            pygame.draw.line(scr, (255, 232, 250), (int(tip[0]), int(tip[1])),
+                             (int(tip[0] + math.cos(aa) * spk), int(tip[1] + math.sin(aa) * spk)), 1)
+
+    def _apply_finale_cam(self, scr, t, bx, by, px, py):
+        """CAMÉRA cinématique de l'exécution : plans qui changent (gros plan dieu,
+        punch sur le héros, smash sur l'impact, recul de révélation)."""
+        W, H = WIDTH, HEIGHT
+        def ease(u):
+            u = 0.0 if u < 0 else (1.0 if u > 1 else u)
+            return u * u * u * (u * (u * 6 - 15) + 10)
+        face = (bx, by - int(self.boss.vis * 0.30))
+        mid = ((bx + px) // 2, (by + py) // 2)
+        kf = [
+            (0,    640, 360, 1.00),    # large : le néant gelé
+            (150,  640, 330, 1.16),    # lente poussée
+            (600,  px,  py,  1.55),    # suit le héros qui s'élève
+            (770,  face[0], face[1], 2.25),  # GROS PLAN sur le dieu (effroi)
+            (980,  px,  py,  1.95),    # PUNCH sur le héros / la lame (charge)
+            (1400, mid[0], mid[1], 1.55),    # cadre les deux (pré-slash)
+            (1545, mid[0], mid[1], 1.62),
+            (1560, bx, by, 2.45),      # SMASH sur l'impact
+            (1650, bx, by, 2.45),      # hold
+            (1810, bx, by, 1.25),      # recul de révélation
+            (2040, 640, 360, 1.00),    # large final
+        ]
+        fx, fy, zoom = 640, 360, 1.0
+        for i in range(len(kf) - 1):
+            t0, fx0, fy0, z0 = kf[i]; t1, fx1, fy1, z1 = kf[i + 1]
+            if t0 <= t <= t1:
+                e = ease((t - t0) / float(max(1, t1 - t0)))
+                fx = fx0 + (fx1 - fx0) * e; fy = fy0 + (fy1 - fy0) * e
+                zoom = z0 + (z1 - z0) * e; break
+        if 1560 <= t < 1624:                          # secousse du smash
+            amp = 16 * (1 - (t - 1560) / 64.0)
+            fx += random.uniform(-amp, amp); fy += random.uniform(-amp, amp)
+        if zoom > 1.01:
+            sw = max(2, int(W / zoom)); sh = max(2, int(H / zoom))
+            sx = max(0, min(W - sw, int(fx) - sw // 2)); sy = max(0, min(H - sh, int(fy) - sh // 2))
+            sub = scr.subsurface(pygame.Rect(sx, sy, sw, sh))
+            scr.blit(pygame.transform.scale(sub.copy(), (W, H)), (0, 0))
+
+    def _draw_finale_timestop(self):
+        scr = self.screen; W, H = WIDTH, HEIGHT; t = self.boss.finale_t; b = self.boss
+        cam = self.cam; fr = self.frame
+        bx = int(b.x - cam[0]); by = int(b.y + b.float_offset - cam[1])
+        px = int(self.player.rect.centerx - cam[0]); py = int(self.player.rect.centery - cam[1])
+        trail = getattr(self, "_fin_trail", [])
+
+        # ═════════ COUCHE MONDE (capturée par la CAMÉRA) ═════════
+        # 1) GEL : voile froid + onde de désaturation.
+        wave = min(1.0, t / 34.0)
+        fz = pygame.Surface((W, H), pygame.SRCALPHA); fz.fill((70, 88, 150, int(78 * wave)))
+        scr.blit(fz, (0, 0))
+        if t < 42:
+            rr = int(t * 36)
+            rs = pygame.Surface((rr * 2 + 8, rr * 2 + 8), pygame.SRCALPHA)
+            pygame.draw.circle(rs, (220, 235, 255, max(0, 190 - t * 4)), (rr + 4, rr + 4), rr, 7)
+            scr.blit(rs, (px - rr - 4, py - rr - 4), special_flags=pygame.BLEND_RGBA_ADD)
+        # 2) Traînées d'après-image.
+        for i, (tx, ty) in enumerate(trail):
+            a = int(130 * (i + 1) / max(1, len(trail)))
+            gs = pygame.Surface((26, 32), pygame.SRCALPHA)
+            pygame.draw.ellipse(gs, (255, 120, 210, a), (0, 0, 26, 32))
+            scr.blit(gs, (int(tx - cam[0] - 13), int(ty - cam[1] - 16)), special_flags=pygame.BLEND_RGBA_ADD)
+        # 3) CHARGE : éclairs héros↔dieu, motes, lueur, yeux du dieu qui flambent.
+        if 600 <= t < 1440:
+            ch = (t - 600) / 840.0
+            hx, hy = px, py - 130
+            for _ in range(2 + int(ch * 3)):
+                jag = []
+                for k in range(8):
+                    u = k / 7.0; w = (1 - abs(u - 0.5) * 2) * 26
+                    jag.append((int(hx + (bx - hx) * u + random.uniform(-w, w)),
+                                int(hy + (by - hy) * u + random.uniform(-w, w))))
+                pygame.draw.lines(scr, (255, 130, 225), False, jag, 2)
+            for i in range(8):
+                a = i * math.tau / 8 + t * (0.04 + 0.05 * ch); rr = 76 - 44 * ch
+                pygame.draw.circle(scr, (255, 205, 246),
+                                   (int(hx + math.cos(a) * rr), int(hy + math.sin(a) * rr)), 3)
+            gr = int(44 + 96 * ch)
+            gs = pygame.Surface((gr * 2 + 6, gr * 2 + 6), pygame.SRCALPHA)
+            pygame.draw.circle(gs, (200, 50, 162, int(55 + 70 * ch)), (gr + 3, gr + 3), gr)
+            scr.blit(gs, (hx - gr - 3, hy - gr - 3), special_flags=pygame.BLEND_RGBA_ADD)
+            eyo = int(b.vis * 0.28)
+            for sgn in (-1, 1):
+                er = int(13 + 9 * ch + 4 * math.sin(t * 0.3))
+                es = pygame.Surface((er * 2 + 4, er * 2 + 4), pygame.SRCALPHA)
+                pygame.draw.circle(es, (255, 40, 40, int(110 + 90 * ch)), (er + 2, er + 2), er)
+                scr.blit(es, (bx + sgn * eyo - er - 2, by - eyo - er - 2), special_flags=pygame.BLEND_RGBA_ADD)
+        # 4) BELLE LAME DE LUMIÈRE (forgée, brandie ; bascule au slash).
+        if 150 <= t < 1560 and not b._fin_cut:
+            grow = min(1.0, (t - 150) / 360.0)
+            charge = min(1.0, max(0.0, (t - 600) / 840.0))
+            blen = int(95 + 175 * grow)
+            ang = (-math.pi / 2 - 0.32) if t < 1440 else (-math.pi / 2 - 0.32) + ((t - 1440) / 120.0) * math.pi
+            self._draw_light_blade(scr, px, py, ang, blen, 0.45 + 0.55 * charge)
+        # 5) GRAND SLASH : la lame fend le dieu en SLOW-MO (1440→1560) + éclat.
+        if 1440 <= t < 1660:
+            sp = min(1.0, (t - 1440) / 120.0)
+            up_p = (bx - 60, by - 150); ctrl = (bx, by); dn_p = (bx + 60, by + 205)
+            full = []
+            for k in range(17):
+                u = k / 16.0
+                full.append((((1 - u) ** 2) * up_p[0] + 2 * (1 - u) * u * ctrl[0] + u * u * dn_p[0],
+                             ((1 - u) ** 2) * up_p[1] + 2 * (1 - u) * u * ctrl[1] + u * u * dn_p[1]))
+            ncut = max(2, int(len(full) * sp))
+            cutpts = [(int(x), int(y)) for x, y in full[:ncut]]
+            if len(cutpts) >= 2:
+                fade = max(0, 255 - int((t - 1440) * 3))
+                gl = pygame.Surface((W, H), pygame.SRCALPHA)
+                pygame.draw.lines(gl, (255, 120, 220, fade), False, cutpts, 22)
+                pygame.draw.lines(gl, (255, 255, 255, min(255, fade + 50)), False, cutpts, 7)
+                scr.blit(gl, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+                fxp, fyp = cutpts[-1]
+                for _ in range(4):
+                    aa = random.uniform(0, math.tau); rr = random.uniform(6, 42)
+                    pygame.draw.line(scr, (255, 222, 250), (fxp, fyp),
+                                     (int(fxp + math.cos(aa) * rr), int(fyp + math.sin(aa) * rr)), 2)
+            if 1560 <= t < 1600:
+                for k in range(18):
+                    aa = k * math.tau / 18; rr = 50 + (t - 1560) * 18
+                    pygame.draw.line(scr, (255, 215, 248), (bx, by),
+                                     (int(bx + math.cos(aa) * rr), int(by + math.sin(aa) * rr)), 2)
+        # 6) Dieu tranché : moitiés écartées + gerbe + DÉFLAGRATION (ondes/rais).
+        if b._fin_cut:
+            sep = int((t - 1560) * 1.2)
+            self._draw_god_halves(scr, bx, by, sep)
+            ws = pygame.Surface((46, int(b.vis * 2)), pygame.SRCALPHA)
+            for k in range(0, ws.get_height(), 5):
+                pygame.draw.line(ws, (255, 240, 250, random.randint(36, 120)), (0, k), (46, k), 2)
+            scr.blit(ws, (bx - 23, by - b.vis), special_flags=pygame.BLEND_RGBA_ADD)
+            dd = t - 1560
+            for k in range(4):
+                d2 = dd - k * 13
+                if d2 <= 0 or d2 > 150: continue
+                rr = int(d2 * 9); aa = max(0, int(205 - d2 * 1.5))
+                if aa <= 0: continue
+                col = (255, 255, 255) if k == 0 else ((235, 60, 180) if k % 2 else (160, 30, 132))
+                sw = pygame.Surface((rr * 2 + 8, rr * 2 + 8), pygame.SRCALPHA)
+                pygame.draw.circle(sw, (*col, aa), (rr + 4, rr + 4), rr, max(2, 8 - k * 2))
+                scr.blit(sw, (bx - rr - 4, by - rr - 4), special_flags=pygame.BLEND_RGBA_ADD)
+            beam_a = max(0, 150 - int(max(0, dd - 70) * 0.5))
+            if beam_a > 0:
+                for i in range(14):
+                    a = i * math.tau / 14 + dd * 0.008; L = 110 + dd * 1.4
+                    pygame.draw.line(scr, (255, 232, 250), (bx, by),
+                                     (int(bx + math.cos(a) * L), int(by + math.sin(a) * L)), 2)
+
+        # ═════════ CAMÉRA (zoom/focus par plan) ═════════
+        self._apply_finale_cam(scr, t, bx, by, px, py)
+
+        # ═════════ SURCOUCHES (non zoomées) : letterbox, répliques, « fin » ═════
+        BAR = 70
+        if t < 30:        bh = int(BAR * t / 30)
+        elif t > 2000:    bh = int(BAR * max(0, 2040 - t) / 40)
+        else:             bh = BAR
+        if bh > 0:
+            for yb in (0, H - bh):
+                bar = pygame.Surface((W, bh), pygame.SRCALPHA); bar.fill((4, 1, 8, 236))
+                ly = bh - 1 if yb == 0 else 0
+                pygame.draw.line(bar, (150, 24, 100), (0, ly), (W, ly), 2)
+                scr.blit(bar, (0, yb))
+        if 220 <= t < 980:
+            if t < 560: self._fin_textbox((255, 150, 225), "comment... je n'ai plus...")
+            else:       self._fin_textbox((255, 90, 90), "...qu'est-ce que tu ES ?")
+        if t >= 1580:
+            a = min(255, int((t - 1580) * 5))
+            if t > 1980: a = max(0, 255 - int((t - 1980) * 4))
+            if a > 0:
+                rev = self.font_big.render("fin", True, (238, 238, 245))
+                rsh = self.font_big.render("fin", True, (20, 6, 24))
+                rev.set_alpha(a); rsh.set_alpha(a)
+                rr = rev.get_rect(center=(W // 2, H // 2 - 150))
+                scr.blit(rsh, (rr.x + 3, rr.y + 3)); scr.blit(rev, rr)
+
+    def _draw_finale_ending(self):
+        scr = self.screen; W, H = WIDTH, HEIGHT; t = self.boss.finale_t
+        cam = self.cam; bx = int(self.boss.x - cam[0]); by = int(self.boss.y - cam[1])
+        # Les deux moitiés du dieu dérivent dans le vide et se dissolvent.
+        if t < 280:
+            fade = max(0, 235 - int(t * 0.9)); sep = 150 + int(t * 1.3)
+            self._draw_god_halves(scr, bx, by + t // 3, sep, alpha=fade)
+        # Vignette qui se referme (le vide engloutit tout).
+        vg = pygame.Surface((W, H), pygame.SRCALPHA)
+        pygame.draw.rect(vg, (0, 0, 0, min(170, 40 + t // 4)), (0, 0, W, H), 180)
+        scr.blit(vg, (0, 0))
+        # TEXTE FINAL — une ligne à la fois.
+        lines = ["Les dieux se croyaient la fin de toute chose.",
+                 "Ils n'avaient jamais rencontré ce qui vient APRÈS.",
+                 "Plus de rêve. Plus de monde. Plus de dieu.",
+                 "Seulement lui. Et le silence qu'il laisse."]
+        y0 = H // 2 - 70
+        for i, ln in enumerate(lines):
+            ap = t - 120 - i * 130
+            if ap <= 0: continue
+            a = min(255, int(ap * 5))
+            col = (235, 70, 70) if i == 3 else (220, 215, 235)
+            s = self.font_med.render(ln, True, col); s.set_alpha(a)
+            scr.blit(s, s.get_rect(center=(W // 2, y0 + i * 46)))
+        if self.finale_done:
+            pulse = 0.5 + 0.5 * math.sin(self.frame * 0.06)
+            hint = self.font_sm.render("[ R ]  Fin", True, (int(150 + 80 * pulse),) * 3)
+            scr.blit(hint, hint.get_rect(center=(W // 2, H - 50)))
 
     def add_shake(self, strength, frames=10):
         self.shake = max(self.shake, frames)
@@ -4386,6 +6392,12 @@ class Game:
     def announce_phase(self, text):
         self.announce_text = text
         self.announce_t = self.announce_max
+
+    def set_attack_callout(self, text, frames=82):
+        # Nom de l'attaque spéciale en cours : claque à l'écran puis s'efface.
+        self.callout_text = text
+        self.callout_t = frames
+        self.callout_max = frames
 
     def update_camera(self, target_rect, bounds=None):
         target_x = target_rect.centerx - WIDTH // 2
@@ -4454,6 +6466,8 @@ class Game:
                             self.phase5_unlocked = True
                     # ── Bouclier (touche 1) ───────────────────────────────────────
                     elif (event.key == pygame.K_1 and self.state == STATE_MOON
+                          and not self._input_locked()
+                          and not self._finale_survival()    # FINALE : plus de bouclier
                           and self.shield_unlocked
                           and self.ability_shield_cd == 0
                           and self.ability_shield_t == 0):
@@ -4462,6 +6476,10 @@ class Game:
                         burst(self.particles,
                               self.player.rect.centerx, self.player.rect.centery,
                               20, (100, 200, 255), 6.0, 30, 0.0, 4)
+                    # ── PASSER une cinématique (spam Espace/Entrée) ───────────────
+                    elif (event.key in (pygame.K_SPACE, pygame.K_RETURN)
+                          and self.state == STATE_MOON and self._skippable()):
+                        self._skip_press()
                     # ── Dialogue Aegis post-boss ──────────────────────────────────
                     elif event.key in (pygame.K_RETURN, pygame.K_SPACE) and self.state == STATE_MOON and self.aegis_dialog_active:
                         line = _AEGIS_BOSS_LINES[self.aegis_dialog_line]
@@ -4499,18 +6517,19 @@ class Game:
                             elif self.pause_sel == 2: self.reset_to_title()
                     elif event.key == pygame.K_r and self.state in (STATE_GAMEOVER, STATE_VICTORY):
                         self.start_overworld()
-                    elif event.key == pygame.K_r and self.state == STATE_MOON and self.fighting_aegis and self.boss and self.boss.dead:
+                    elif (event.key == pygame.K_r and self.state == STATE_MOON
+                          and self.fighting_aegis and self.finale_done):
                         self.fighting_aegis = False
                         self.reset_to_title()
                     elif event.key == pygame.K_r and self.state == STATE_MOON and self.final_blow_hub_t > 0:
                         self.start_hub()
-                    elif event.key == pygame.K_SPACE and self.state in (STATE_HUB, STATE_MOON):
+                    elif event.key == pygame.K_SPACE and self.state in (STATE_HUB, STATE_MOON) and not self._input_locked():
                         self.player.press_jump(self.particles)
-                    elif event.key in (pygame.K_a, pygame.K_LSHIFT, pygame.K_RSHIFT) and self.state in (STATE_HUB, STATE_MOON):
+                    elif event.key in (pygame.K_a, pygame.K_LSHIFT, pygame.K_RSHIFT) and self.state in (STATE_HUB, STATE_MOON) and not self._input_locked():
                         if self.player.try_dash(self.particles) and self.state == STATE_MOON and self.boss:
                             self._check_parry()
                 elif event.type == pygame.KEYUP:
-                    if event.key == pygame.K_SPACE and self.state in (STATE_HUB, STATE_MOON):
+                    if event.key == pygame.K_SPACE and self.state in (STATE_HUB, STATE_MOON) and not self._input_locked():
                         self.player.release_jump()
                 elif event.type == pygame.MOUSEBUTTONDOWN and self.state == STATE_TITLE:
                     if self.settings_open:
@@ -4531,10 +6550,16 @@ class Game:
                         self.handle_settings_mouse(event.pos[0], event.pos[1])
                     if self.show_controls_popup and event.button in (4, 5):
                         self.controls_scroll += -1 if event.button == 4 else 1
-                    if event.button == 1:
-                        mx, my = event.pos
-                        a = self.player.fire_bow(mx, my, self.cam)
-                        if a: self.arrows.append(a)
+                    if event.button == 1 and not self._input_locked():
+                        if self._finale_survival():
+                            # FINALE : plus d'arc. Le clic n'active QUE la compétence
+                            # « ?! » une fois la jauge pleine → le temps s'arrête.
+                            if self.finale_gauge >= 1.0:
+                                self._finale_activate_skill()
+                        else:
+                            mx, my = event.pos
+                            a = self.player.fire_bow(mx, my, self.cam)
+                            if a: self.arrows.append(a)
                 elif event.type == pygame.MOUSEMOTION:
                     if self.settings_open and pygame.mouse.get_pressed()[0]:
                         self.handle_settings_mouse(event.pos[0], event.pos[1])
@@ -4576,18 +6601,33 @@ class Game:
                     self.player._aim_angle = math.atan2(_my - _scy, _mx - _scx)
                 self.draw_world(in_arena=True)
                 self.draw_screen_flash()
-                if self.fighting_aegis and self.boss and self.boss.dead:
+                # IMPORTANT : pendant la FINALE, le coup fatal remet boss.dead=True,
+                # mais il ne FAUT PAS réafficher le texte de mort (sinon ça écrase la
+                # coupe/le dérive/la vraie fin). La finale gère son propre rendu.
+                if (self.fighting_aegis and self.boss and self.boss.dead
+                        and not getattr(self.boss, "finale_active", False)):
                     self.draw_aegis_ending()
                 elif self.aegis_dialog_active:
                     self.draw_aegis_dialog()
                 elif self.final_blow_hub_t > 0:
                     self._draw_victory_overlay()
+                elif self._boss_cine_kind() is not None:
+                    pass   # NÉMÉSIS / COURROUX : aucun HUD (cinématique plein écran)
+                elif isinstance(self.boss, AegisBoss) and getattr(self.boss, "finale_active", False):
+                    pass   # FINALE : aucun HUD normal (la jauge « ?! » est dessinée à part)
+                elif (self.boss and isinstance(self.boss, AegisBoss)
+                      and self.boss.state == "intro"):
+                    self.draw_announce()      # ENTRÉE : seulement le nom de phase
+                    self.draw_subtitle()      # + les répliques du dieu
                 else:
                     self.draw_boss_ui()
                     self.draw_announce()
                     self.draw_subtitle()
+                    self.draw_attack_callout()
                     self.draw_shield_ability()
                     self.draw_skill_bar()
+                # Indice « passer » (s'auto-affiche seulement pendant une cinématique).
+                self._draw_skip_hint()
             elif self.state == STATE_GAMEOVER:
                 self.draw_world(in_arena=(self.boss is not None))
                 self.draw_gameover()
@@ -4960,25 +7000,179 @@ class Game:
             fo.set_alpha(alpha)
             surf.blit(fo, (0, 0))
 
+    # ── Cinématique d'ENTRÉE d'Aegis (15 s) ─────────────────────────────────
+    def _draw_aegis_intro(self):
+        """Entrée d'Aegis : descente, éveil, révélation (façon Sans/Asgore)."""
+        boss = self.boss; scr = self.screen
+        t = boss.intro_t; T = 900
+        W, H = WIDTH, HEIGHT; cam = self.cam
+        bx = int(boss.x - cam[0]); by = int(boss.y - cam[1])
+
+        def ease(u):
+            u = 0.0 if u < 0 else (1.0 if u > 1 else u)
+            return u * u * u * (u * (u * 6 - 15) + 10)
+
+        # 1) FX monde : ONDE DE CHOC dorée propre, émise du sol à l'éveil.
+        if 430 <= t < 580:
+            d = t - 430
+            yg = by + int(boss.vis * 0.92)
+            for k in range(2):
+                dd = d - k * 14
+                if dd <= 0: continue
+                rr = int(dd * 7); aa = max(0, int(170 - dd * 1.8))
+                if aa <= 0 or rr <= 0: continue
+                sw = pygame.Surface((rr * 2 + 8, rr * 2 + 8), pygame.SRCALPHA)
+                pygame.draw.circle(sw, (255, 205, 120, aa), (rr + 4, rr + 4), rr, 4)
+                scr.blit(sw, (bx - rr - 4, yg - rr - 4), special_flags=pygame.BLEND_RGBA_ADD)
+
+        # 2) ZOOM : suit la descente puis RECULE pour révéler l'échelle du dieu.
+        kf = [
+            (0,   bx, max(70, by), 2.30),
+            (150, bx, max(70, by), 2.30),
+            (430, bx, by,          1.95),
+            (620, bx, by,          1.45),
+            (820, bx, by,          1.45),
+            (T,   bx, by,          1.00),
+        ]
+        fx, fy, zoom = bx, by, 1.0
+        for i in range(len(kf) - 1):
+            t0, fx0, fy0, z0 = kf[i]; t1, fx1, fy1, z1 = kf[i + 1]
+            if t0 <= t <= t1:
+                e = ease((t - t0) / float(max(1, t1 - t0)))
+                fx = fx0 + (fx1 - fx0) * e; fy = fy0 + (fy1 - fy0) * e
+                zoom = z0 + (z1 - z0) * e; break
+        if 430 <= t < 446:                              # coup de zoom sec à l'éveil
+            zoom *= 1.0 + 0.10 * (1 - (t - 430) / 16.0)
+        if zoom > 1.01:
+            sw = max(2, int(W / zoom)); sh = max(2, int(H / zoom))
+            sx = max(0, min(W - sw, int(fx) - sw // 2))
+            sy = max(0, min(H - sh, int(fy) - sh // 2))
+            sub = scr.subsurface(pygame.Rect(sx, sy, sw, sh))
+            scr.blit(pygame.transform.scale(sub.copy(), (W, H)), (0, 0))
+
+        # 3) Surcouches plein écran (letterbox, vignette, carte-titre, fondu).
+        bar_max = 78
+        if t < 40: bar_h = int(bar_max * t / 40)
+        elif t > T - 50: bar_h = int(bar_max * max(0, T - t) / 50)
+        else: bar_h = bar_max
+        if bar_h > 0:
+            for yb in (0, H - bar_h):
+                bar = pygame.Surface((W, bar_h), pygame.SRCALPHA); bar.fill((4, 0, 8, 240))
+                ly = bar_h - 1 if yb == 0 else 0
+                pygame.draw.line(bar, (180, 20, 120), (0, ly), (W, ly), 2)
+                scr.blit(bar, (0, yb))
+        vg = pygame.Surface((W, H), pygame.SRCALPHA)
+        pygame.draw.rect(vg, (90, 0, 60, 90), (0, 0, W, H), 130)
+        scr.blit(vg, (0, 0))
+        if 430 <= t < 600:                              # carte-titre « AEGIS »
+            a = min(255, int((t - 430) * 12))
+            if t > 560: a = max(0, 255 - int((t - 560) * 6))
+            if a > 0:
+                scale = 1.0 + 0.5 * ease(min(1.0, (t - 430) / 60.0))
+                base = self.font_big.render("AEGIS", True, (255, 60, 60))
+                bw = max(1, int(base.get_width() * scale)); bh = max(1, int(base.get_height() * scale))
+                big = pygame.transform.smoothscale(base, (bw, bh))
+                shs = pygame.transform.smoothscale(self.font_big.render("AEGIS", True, (30, 0, 0)), (bw, bh))
+                big.set_alpha(a); shs.set_alpha(a)
+                rr = big.get_rect(center=(W // 2, H // 2 - 36))
+                scr.blit(shs, (rr.x + 4, rr.y + 4)); scr.blit(big, rr)
+
+        # Répliques du dieu — LISIBLES (caisson sombre + ombre) dans le bas.
+        def _gline(txt, t0, t1):
+            if not (t0 <= t < t1): return
+            a = 255
+            if t < t0 + 22: a = int(255 * (t - t0) / 22)
+            elif t > t1 - 25: a = int(255 * (t1 - t) / 25)
+            a = max(0, min(255, a))
+            if a <= 0: return
+            s = self.font_med.render(txt, True, (255, 238, 214))
+            sh = self.font_med.render(txt, True, (16, 2, 24))
+            box = pygame.Surface((s.get_width() + 54, s.get_height() + 20), pygame.SRCALPHA)
+            box.fill((6, 1, 12, int(180 * a / 255)))
+            br = box.get_rect(center=(W // 2, H - 40)); scr.blit(box, br)
+            s.set_alpha(a); sh.set_alpha(a)
+            r = s.get_rect(center=(W // 2, H - 40))
+            scr.blit(sh, (r.x + 2, r.y + 2)); scr.blit(s, r)
+        _gline("Petite chose… tu oses gravir jusqu'à MOI ?", 600, 770)
+        _gline("Soit. Que ton jugement commence.", 770, 900)
+
+        if t < 70:                                      # fondu d'entrée (depuis le noir)
+            fo = pygame.Surface((W, H)); fo.fill((0, 0, 0)); fo.set_alpha(int(255 * (1 - t / 70.0)))
+            scr.blit(fo, (0, 0))
+
     # ── Cinématique de fin : mort d'Aegis ───────────────────────────────────
 
     def draw_aegis_ending(self):
         surf = self.screen
         t = self.aegis_ending_t
-        # Fondu au noir progressif (0 → 120 frames)
-        black_a = min(255, int(255 * t / 110.0))
-        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        veil.fill((0, 0, 0, black_a))
-        surf.blit(veil, (0, 0))
+        W, H = WIDTH, HEIGHT
+        cam = self.cam
+        boss = self.boss
+        bx = int(boss.x - cam[0]); by = int(boss.y - cam[1])
 
-        if t < 120:
-            return  # on attend le noir complet avant le texte
+        def ease(u):
+            u = 0.0 if u < 0 else (1.0 if u > 1 else u)
+            return u * u * u * (u * (u * 6 - 15) + 10)
 
-        # Texte de fin : lignes qui apparaissent une à une
-        line_t = t - 120
+        # ════════ CINÉMATIQUE DE MORT (10 s = 600 frames) ════════
+        if t < 600:
+            # 1) Fissures + faisceaux de lumière jaillissant du dieu agonisant.
+            if t < 470:
+                erupt = ease(min(1.0, t / 430.0))
+                fxs = pygame.Surface((W, H), pygame.SRCALPHA)
+                nb = int(6 + 14 * erupt)
+                for i in range(nb):
+                    a = i * math.tau / nb + t * 0.03
+                    L = (90 + 250 * erupt) * (0.7 + 0.3 * math.sin(t * 0.2 + i))
+                    col = (255, 255, 255) if i % 3 == 0 else (235, 40, 165)
+                    pygame.draw.line(fxs, (*col, max(0, int(150 * erupt))),
+                                     (bx, by), (int(bx + math.cos(a) * L), int(by + math.sin(a) * L)),
+                                     max(2, int(2 + 5 * erupt)))
+                cr = int(20 + 72 * erupt)
+                pygame.draw.circle(fxs, (255, 240, 250, max(0, int(180 * erupt))), (bx, by), cr)
+                pygame.draw.circle(fxs, (255, 255, 255, max(0, int(220 * erupt))), (bx, by), max(4, cr // 2))
+                surf.blit(fxs, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+
+            # 2) Zoom doux sur le dieu mourant, puis recul.
+            if t < 320:   zoom = 1.0 + 0.4 * ease(t / 320.0)
+            elif t < 430: zoom = 1.4
+            else:         zoom = 1.4 - 0.4 * ease((t - 430) / 130.0)
+            if zoom > 1.01 and t < 560:
+                sw = max(2, int(W / zoom)); sh = max(2, int(H / zoom))
+                sx = max(0, min(W - sw, bx - sw // 2)); sy = max(0, min(H - sh, by - sh // 2))
+                sub = surf.subsurface(pygame.Rect(sx, sy, sw, sh))
+                surf.blit(pygame.transform.scale(sub.copy(), (W, H)), (0, 0))
+
+            # 3) Ondes de choc de l'éclatement.
+            if 440 <= t < 540:
+                for k in range(3):
+                    d = (t - 440) - k * 10
+                    if d <= 0: continue
+                    rr = int(d * 11); aa = max(0, int(220 - d * 3))
+                    if aa <= 0 or rr <= 0: continue
+                    sw2 = pygame.Surface((rr * 2 + 10, rr * 2 + 10), pygame.SRCALPHA)
+                    pygame.draw.circle(sw2, (255, 230, 250, aa), (rr + 5, rr + 5), rr, max(2, 9 - k * 2))
+                    surf.blit(sw2, (W // 2 - rr - 5, H // 2 - rr - 5), special_flags=pygame.BLEND_RGBA_ADD)
+
+            # 4) White-out de l'éclatement.
+            if 440 <= t < 500:
+                fa = max(0, int(255 * (1 - (t - 440) / 60.0)))
+                fs = pygame.Surface((W, H)); fs.fill((255, 255, 255)); fs.set_alpha(fa)
+                surf.blit(fs, (0, 0))
+
+            # 5) Assombrissement progressif vers le noir (500 → 600).
+            if t > 500:
+                fa = int(255 * min(1.0, (t - 500) / 100.0))
+                fo = pygame.Surface((W, H)); fo.fill((0, 0, 0)); fo.set_alpha(fa)
+                surf.blit(fo, (0, 0))
+            return
+
+        # ════════ ÉCRAN DE FIN : texte de mort (t ≥ 600) ════════
+        veil = pygame.Surface((W, H)); veil.fill((0, 0, 0)); surf.blit(veil, (0, 0))
+        line_t = t - 600
         per_line = 70
-        cx = WIDTH // 2
-        y0 = HEIGHT // 2 - (len(_AEGIS_DEATH_LINES) * 22)
+        cx = W // 2
+        y0 = H // 2 - (len(_AEGIS_DEATH_LINES) * 22)
         for i, line in enumerate(_AEGIS_DEATH_LINES):
             appear = line_t - i * per_line
             if appear <= 0:
@@ -4989,12 +7183,8 @@ class Game:
             s.set_alpha(alpha)
             surf.blit(s, s.get_rect(center=(cx, y0 + i * 44)))
 
-        # Prompt de retour après que tout le texte soit affiché
-        if line_t > len(_AEGIS_DEATH_LINES) * per_line + 60:
-            pulse = 0.5 + 0.5 * math.sin(self.frame * 0.06)
-            hint = self.font_sm.render("[ R ]  Retour au titre", True,
-                                       (int(150 + 80 * pulse),) * 3)
-            surf.blit(hint, hint.get_rect(center=(cx, HEIGHT - 70)))
+        # PAS de prompt [R] ici : c'est un FAUX ending. Le joueur croit que c'est
+        # fini… puis la fissure s'ouvre (la vraie fin prend le relais à te=1150).
 
     # ── Animation sauvegarde style DS ───────────────────────────────────────
 
@@ -5110,7 +7300,45 @@ class Game:
     def update_moon(self):
         if self.p5_cinematic_t > 0:
             self.p5_cinematic_t -= 1
+        if self._skip_charge > 0:                 # la charge de skip retombe seule
+            self._skip_charge = max(0.0, self._skip_charge - 2.5)
         keys = pygame.key.get_pressed()
+        # ── FINALE — actes CINÉMATIQUES (prélude/dialogue/time-stop/fin) : gelés.
+        #    L'acte « survival » N'est PAS géré ici : il continue en gameplay normal.
+        if self._finale_cine():
+            self._update_finale_cine()
+            return
+        # ── NÉMÉSIS : cinématique d'ouverture phase 7 — GAMEPLAY GELÉ ────────
+        # On ne fait avancer que le boss (qui scripte la cinématique) et les
+        # particules. Pas d'input, pas de physique joueur, pas de collisions,
+        # pas de caméra (figée au départ) : le héros est intouchable.
+        if self._boss_cine_kind() is not None:
+            self.boss.update(self.player, self.beams, self.projectiles_boss,
+                             self.rings, self.telegraphs, self.particles)
+            self.player.invuln = max(self.player.invuln, 8)
+            for part in self.particles: part.update()
+            self.particles[:] = [p for p in self.particles if p.alive()]
+            if self.announce_t > 0: self.announce_t -= 1
+            if self.flash_t > 0: self.flash_t -= 1
+            if self.subtitle_t > 0: self.subtitle_t -= 1
+            if self.callout_t > 0: self.callout_t -= 1
+            self.starfield.update(); self.dust.update()
+            return
+        # ── ENTRÉE grandiose d'Aegis (15 s) : gameplay gelé, héros planté. ──
+        if (self.boss and isinstance(self.boss, AegisBoss)
+                and self.boss.state == "intro"):
+            self.boss.update(self.player, self.beams, self.projectiles_boss,
+                             self.rings, self.telegraphs, self.particles)
+            self.player.update(_FROZEN_KEYS, self.platforms, self.particles)
+            self.cam = [0, 0]
+            for part in self.particles: part.update()
+            self.particles[:] = [p for p in self.particles if p.alive()]
+            if self.announce_t > 0: self.announce_t -= 1
+            if self.flash_t > 0: self.flash_t -= 1
+            if self.subtitle_t > 0: self.subtitle_t -= 1
+            if self.callout_t > 0: self.callout_t -= 1
+            self.starfield.update(); self.dust.update()
+            return
         pull_x, pull_y, pull_force = (None, None, 0.0)
         if self.boss:
             pull_x, pull_y, pull_force = self.boss.get_pull()
@@ -5118,6 +7346,13 @@ class Game:
                            pull_x=pull_x, pull_y=pull_y, pull_force=pull_force)
         if self.god_mode:
             self.player.hp = self.player.max_hp
+            # SPAM d'attaques : auto-tir rapide tant que le clic gauche est tenu.
+            if not self._input_locked() and pygame.mouse.get_pressed()[0]:
+                if self.player.bow_cd <= 0:
+                    _mx, _my = pygame.mouse.get_pos()
+                    _a = self.player.fire_bow(_mx, _my, self.cam)
+                    if _a: self.arrows.append(_a)
+                    self.player.bow_cd = 4     # cadence de spam (≈15 tirs/s)
         # ── Bouclier compétence ────────────────────────────────────────────
         if self.ability_shield_t > 0:
             self.ability_shield_t -= 1
@@ -5234,6 +7469,14 @@ class Game:
         if self.announce_t > 0: self.announce_t -= 1
         if self.flash_t > 0: self.flash_t -= 1
         if self.subtitle_t > 0: self.subtitle_t -= 1
+        if self.callout_t > 0: self.callout_t -= 1
+
+        # FINALE — SURVIE : le héros est INCREVABLE (planché à 1 PV) et la jauge
+        # « ?! » se remplit en tenant bon (~28 s) jusqu'à pouvoir frapper.
+        if self._finale_survival():
+            if self.player.hp < 1:
+                self.player.hp = 1
+            self.finale_gauge = min(1.0, self.finale_gauge + 1.0 / 1680.0)
 
         if self.player.hp <= 0:
             self.state = STATE_GAMEOVER
@@ -5244,13 +7487,35 @@ class Game:
             # ── Fin du combat Aegis : cinématique de fin ──────────────────
             if self.fighting_aegis:
                 self.aegis_ending_t += 1
-                if self.aegis_ending_t == 1:
+                te = self.aegis_ending_t
+                if te == 1:
                     self.player.score += 5000
-                if self.aegis_ending_t < 100 and self.aegis_ending_t % 6 == 0:
-                    burst(self.particles, self.boss.x + random.randint(-120, 120),
-                          self.boss.y + random.randint(-120, 120),
-                          30, _AEGIS_COL_DARK, 7.0, 55, 0.0, 5)
-                self.update_camera(self.player.rect, bounds=(-220, -200, 1600, 800))
+                # ── LE FAUX ENDING : DÈS que le texte de mort a fini de s'afficher,
+                #    la fissure s'ouvre (progressivement, dans le prélude). ──
+                if (te == 1000 and isinstance(self.boss, AegisBoss)
+                        and not self.boss.finale_fired):
+                    self.boss._start_finale(self.player, self.beams, self.projectiles_boss,
+                                            self.rings, self.telegraphs, self.particles)
+                    return
+                # Convulsions : éruptions de lumière de + en + violentes (0→440).
+                if te < 440 and te % max(3, 9 - te // 70) == 0:
+                    burst(self.particles, self.boss.x + random.randint(-130, 130),
+                          self.boss.y + random.randint(-130, 130),
+                          26, _AEGIS_COL_DARK, 7.0, 55, 0.0, 5)
+                    if te % 28 == 0:
+                        self.add_shake(8 + te // 70, 14)
+                # ÉCLATEMENT du dieu : déflagration colossale.
+                if te == 440:
+                    self.add_shake(30, 50)
+                    self.flash((255, 255, 255), 26)
+                    for col, spd, sz in (((255, 255, 255), 16.0, 9),
+                                         (_AEGIS_COL_DARK, 12.0, 7),
+                                         (_AEGIS_COL_MIXED, 9.0, 6),
+                                         ((120, 12, 150), 7.0, 6)):
+                        burst(self.particles, self.boss.x, self.boss.y, 120, col, spd, 80, 0.0, sz)
+                # Caméra centrée sur le dieu mourant (cadrage de la cinématique).
+                self.update_camera(pygame.Rect(int(self.boss.x) - 40, int(self.boss.y) - 40, 80, 80),
+                                   bounds=(-220, -200, 1600, 800))
                 return
             if self.aegis_dialog_active:
                 self.update_aegis_dialog()
@@ -5274,6 +7539,13 @@ class Game:
 
     def draw_world(self, in_arena):
         dim = self.player.dimension if self.player else DIM_REAL
+
+        # ── FINALE : le décor est LE NÉANT (noir + poussière d'étoiles). ──
+        if in_arena and isinstance(self.boss, AegisBoss) and getattr(self.boss, "finale_active", False):
+            self.screen.fill((6, 2, 12))
+            self.starfield.draw(self.screen, self.cam, DIM_REAL)
+            self._draw_finale_world()
+            return
 
         # ── Couche 0 : ciel de base (statique) ──
         if self.bg_sky:
@@ -5424,7 +7696,7 @@ class Game:
         for a in self.arrows: a.draw(self.screen, self.cam)
         for orb in self.heal_orbs: orb.draw(self.screen, self.cam)
 
-        if in_arena and self.boss and self.boss.state == "fighting" and self.boss.phase == 3 and dim == DIM_REAL:
+        if in_arena and isinstance(self.boss, MoonBoss) and self.boss.state == "fighting" and self.boss.phase == 3 and dim == DIM_REAL:
             overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
             overlay.fill((0, 0, 0, 245))   # quasi-noir en réalité seulement (rêve = visible)
             # Cercle autour du boss toujours visible
@@ -5439,13 +7711,34 @@ class Game:
                 pygame.draw.circle(overlay, (0, 0, 0, 0), (int(sx), int(sy)), 110)
             self.screen.blit(overlay, (0, 0))
 
-        if self.player: self.player.draw(self.screen, self.cam)
+        _cine = self._boss_cine_kind() if in_arena else None
+        if self.player:
+            # Pendant une cinématique-attaque, le héros est gelé en invuln permanent
+            # → sans ça, le clignotement d'invulnérabilité le rend invisible.
+            if _cine is not None:
+                _sav_inv = self.player.invuln
+                self.player.invuln = 0
+                self.player.draw(self.screen, self.cam)
+                self.player.invuln = _sav_inv
+            else:
+                self.player.draw(self.screen, self.cam)
 
         for part in self.particles: part.draw(self.screen, self.cam)
 
         for d in self.damage_numbers: d.draw(self.screen, self.cam)
 
-        if self.player:
+        # ── Cinématiques-attaques scriptées (plein écran, zoom + overlays). ──
+        if _cine == "nemesis":
+            self._draw_nemesis()
+        elif _cine == "courroux":
+            self._draw_courroux()
+        # ── ENTRÉE grandiose d'Aegis : cinématique d'entrée plein écran ──
+        _intro = (in_arena and isinstance(self.boss, AegisBoss)
+                  and self.boss.state == "intro")
+        if _intro:
+            self._draw_aegis_intro()
+
+        if self.player and _cine is None and not _intro:
             self.draw_hud()
             if self.player.dimension == DIM_DREAM:
                 self._draw_dream_warning()
@@ -5615,6 +7908,729 @@ class Game:
                 fa = int(255 * max(0, 1.0 - (t - 185) / 15.0))
                 s.fill((255, 60, 20, fa))
             self.screen.blit(s, (0, 0))
+
+        # ── L'Enchaînement Divin : cadrage CINÉMATIQUE (façon combat de Sans) ─
+        if in_arena and isinstance(self.boss, AegisBoss) and self.boss._cine_active:
+            ct = self.boss._cine_t
+            cd = max(1, self.boss._cine_dur)
+            bar_max = 58
+            # Bandes letterbox : entrée (0→16), tenue, sortie (cd-26→cd).
+            if ct < 16:
+                bar_h = int(bar_max * ct / 16)
+            elif ct > cd - 26:
+                bar_h = int(bar_max * max(0, cd - ct) / 26)
+            else:
+                bar_h = bar_max
+            # Vignette magenta « dread » qui respire avec la même enveloppe.
+            env = (min(1.0, ct / 16.0) if ct < 16
+                   else (max(0.0, (cd - ct) / 26.0) if ct > cd - 26 else 1.0))
+            vig_a = int(70 * env)
+            if vig_a > 0:
+                vg = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+                pygame.draw.rect(vg, (120, 10, 90, vig_a), (0, 0, WIDTH, HEIGHT), 110)
+                self.screen.blit(vg, (0, 0))
+            if bar_h > 0:
+                gl = max(0, min(255, int(150 + 90 * math.sin(ct * 0.2))))
+                top_bar = pygame.Surface((WIDTH, bar_h), pygame.SRCALPHA)
+                top_bar.fill((6, 2, 10, 238))
+                pygame.draw.line(top_bar, (235, 40, 165, gl),
+                                 (0, bar_h - 1), (WIDTH, bar_h - 1), 2)
+                self.screen.blit(top_bar, (0, 0))
+                bot_bar = pygame.Surface((WIDTH, bar_h), pygame.SRCALPHA)
+                bot_bar.fill((6, 2, 10, 238))
+                pygame.draw.line(bot_bar, (235, 40, 165, gl), (0, 0), (WIDTH, 0), 2)
+                self.screen.blit(bot_bar, (0, HEIGHT - bar_h))
+            # Titre claqué dans la bande haute : punch-in puis estompe.
+            if bar_h > 12 and ct < cd - 26:
+                if ct < 10:
+                    title_a = int(255 * ct / 10)
+                elif ct > 96:
+                    title_a = max(60, 255 - int((ct - 96) * 1.8))
+                else:
+                    title_a = 255
+                name = self.boss._cine_name
+                ts = self.font_announce.render(name, True, (255, 222, 246))
+                sh = self.font_announce.render(name, True, (45, 4, 32))
+                ts.set_alpha(title_a); sh.set_alpha(title_a)
+                tr = ts.get_rect(center=(WIDTH // 2, 27))
+                self.screen.blit(sh, (tr.x + 2, tr.y + 2))
+                self.screen.blit(ts, tr)
+                # Chevrons latéraux qui pointent vers le titre.
+                cyl = 27
+                for sgn, x0 in ((-1, tr.left - 26), (1, tr.right + 26)):
+                    pygame.draw.polygon(self.screen, (255, 95, 215, title_a),
+                        [(x0, cyl - 9), (x0 + sgn * 13, cyl), (x0, cyl + 9)])
+            # Compteur de vagues dans la bande basse (pips chevrons).
+            if bar_h > 12:
+                wv = self.boss._cine_wave; wt = max(1, self.boss._cine_waves)
+                pip_y = HEIGHT - bar_h // 2
+                x0 = WIDTH // 2 - (wt - 1) * 13
+                for i in range(wt):
+                    cxp = x0 + i * 26
+                    on = i < wv
+                    col = (255, 95, 215) if on else (96, 44, 86)
+                    pts = [(cxp - 7, pip_y + 6), (cxp, pip_y - 7), (cxp + 7, pip_y + 6)]
+                    pygame.draw.polygon(self.screen, col, pts)
+                    if on:
+                        pygame.draw.polygon(self.screen, (255, 236, 250), pts, 1)
+
+    # ── NÉMÉSIS : rendu de la cinématique d'ouverture de la phase 7 ─────────
+    def _blit_star(self, surf, cx, cy, r_out, r_in, color, glow=None, a=255,
+                   points=5, rot=0.0):
+        """Étoile additive (pour les yeux rouges d'Aegis)."""
+        r_out = max(2.0, r_out); r_in = max(1.0, r_in)
+        side = int(r_out * 2 + 10)
+        s = pygame.Surface((side, side), pygame.SRCALPHA)
+        c = side / 2.0
+        if glow:
+            pygame.draw.circle(s, (*glow, int(a * 0.45)), (int(c), int(c)), int(r_out))
+        pts = []
+        for i in range(points * 2):
+            rr = r_out if i % 2 == 0 else r_in
+            ang = rot - math.pi / 2 + i * math.pi / points
+            pts.append((c + math.cos(ang) * rr, c + math.sin(ang) * rr))
+        pygame.draw.polygon(s, (*color, max(0, min(255, a))), pts)
+        surf.blit(s, (cx - c, cy - c), special_flags=pygame.BLEND_RGBA_ADD)
+
+    def _blit_black_hole(self, surf, cx, cy, R, frame):
+        """Trou noir : halo gravitationnel + cœur opaque + disque d'accrétion +
+        double spirale contrarotative + anneau de lentille incandescent."""
+        R = max(4, int(R))
+        side = R * 6
+        s = pygame.Surface((side, side), pygame.SRCALPHA)
+        c = side // 2
+        # Halo gravitationnel diffus (lumière courbée alentour).
+        for k in range(6):
+            rr = int(R * (2.2 - k * 0.3))
+            if rr <= 0: continue
+            pygame.draw.circle(s, (120, 14, 96, max(0, 24 - k * 3)), (c, c), rr)
+        # Disque d'accrétion magenta (anneaux brillants).
+        for k in range(4):
+            aa = max(0, int(180 - k * 42))
+            pygame.draw.circle(s, (205, 30, 156, aa), (c, c), R + 6 + k * 7, 3)
+        # Double spirale contrarotative.
+        for i in range(20):
+            a = i * math.tau / 20 + frame * 0.09
+            x1 = c + math.cos(a) * (R + 34); y1 = c + math.sin(a) * (R + 34)
+            x2 = c + math.cos(a + 0.6) * (R * 0.45); y2 = c + math.sin(a + 0.6) * (R * 0.45)
+            pygame.draw.line(s, (170, 36, 132, 120), (x1, y1), (x2, y2), 2)
+        for i in range(14):
+            a = -i * math.tau / 14 - frame * 0.05
+            x1 = c + math.cos(a) * (R + 18); y1 = c + math.sin(a) * (R + 18)
+            x2 = c + math.cos(a + 0.5) * (R * 0.6); y2 = c + math.sin(a + 0.5) * (R * 0.6)
+            pygame.draw.line(s, (235, 60, 180, 90), (x1, y1), (x2, y2), 1)
+        # Cœur opaque (le vide absolu).
+        for k in range(6):
+            rr = int(R * (1.0 - k / 7.0))
+            if rr <= 0: continue
+            col = (3, 0, 6, 255) if k == 0 else (10, 0, 16, max(120, 225 - k * 20))
+            pygame.draw.circle(s, col, (c, c), rr)
+        # Anneau de lentille : fine ligne incandescente au bord de l'horizon.
+        glow = max(0, min(255, int(180 + 60 * math.sin(frame * 0.18))))
+        pygame.draw.circle(s, (255, 90, 205, glow), (c, c), R + 2, 2)
+        surf.blit(s, (cx - c, cy - c))
+
+    def _blit_white_hole(self, surf, cx, cy, R, frame):
+        """Trou blanc : noyau éblouissant + halo radiant pulsé + couronne de
+        rayons jaillissants (longs + courts) + anneau de choc."""
+        R = max(4, int(R))
+        side = R * 6
+        s = pygame.Surface((side, side), pygame.SRCALPHA)
+        c = side // 2
+        # Halo radiant en dégradé.
+        for k in range(9):
+            rr = int(R * (2.0 - k * 0.18))
+            if rr <= 0: continue
+            pygame.draw.circle(s, (255, 250, 240, int(20 + 16 * k)), (c, c), rr)
+        # Rayons longs jaillissants (rotation lente).
+        for i in range(16):
+            a = i * math.tau / 16 - frame * 0.06
+            r1 = R + 44 + 16 * math.sin(frame * 0.18 + i)
+            x2 = c + math.cos(a) * r1; y2 = c + math.sin(a) * r1
+            pygame.draw.line(s, (255, 255, 245, 150), (c, c), (x2, y2), 2)
+        # Rayons courts intercalés (contre-rotation).
+        for i in range(16):
+            a = i * math.tau / 16 + math.pi / 16 + frame * 0.04
+            r1 = R + 22 + 8 * math.sin(frame * 0.25 + i)
+            x2 = c + math.cos(a) * r1; y2 = c + math.sin(a) * r1
+            pygame.draw.line(s, (255, 240, 220, 110), (c, c), (x2, y2), 1)
+        # Anneau de choc.
+        pul = max(0, min(255, int(150 + 80 * math.sin(frame * 0.2))))
+        pygame.draw.circle(s, (255, 255, 250, pul), (c, c), R + 10, 2)
+        # Noyau éblouissant.
+        pygame.draw.circle(s, (255, 255, 255, 255), (c, c), int(R * 0.72))
+        surf.blit(s, (cx - c, cy - c), special_flags=pygame.BLEND_RGBA_ADD)
+
+    def _draw_nemesis(self):
+        """Cinématique NÉMÉSIS (ouverture phase 7), 50 s, entièrement scriptée.
+        Couches : (1) FX en espace-monde, (2) ZOOM dynamique (keyframes lissées),
+        (3) surcouches plein écran (letterbox, titre, répliques, flashs)."""
+        boss = self.boss
+        scr = self.screen
+        t = boss.nemesis_t
+        T = boss.nemesis_dur
+        W, H = WIDTH, HEIGHT
+        cam = self.cam
+        fr = self.frame
+        (B_EYES, B_GRAB, B_LIFT, B_BLACK, B_WHITE, B_FACE, B_TAUNT,
+         B_CHARGE, B_LASER, B_SLAM, B_EXHAUST, B_CONVERGE, B_BOOM) = boss._nem_beats()
+
+        def _ease(u):
+            u = 0.0 if u < 0 else (1.0 if u > 1 else u)
+            return u * u * u * (u * (u * 6 - 15) + 10)   # smootherstep quintique
+
+        # Coordonnées écran (caméra figée à 0,0 pendant NÉMÉSIS).
+        bx = int(boss.x - cam[0]); by = int(boss.y + boss.float_offset - cam[1])
+        px = int(boss._nem_px - cam[0]); py = int(boss._nem_py - cam[1])
+        black = (int(boss.cx + 520 - cam[0]), int(boss.target_y + 40 - cam[1]))
+        white = (int(boss.cx - 520 - cam[0]), int(boss.target_y + 40 - cam[1]))
+        # Ancrages mains/yeux proportionnels à la taille (agrandie) du sprite.
+        hox = int(boss.vis * 0.58); hoy = int(boss.vis * 0.47); eyo = int(boss.vis * 0.28)
+
+        # Naissance lissée des trous.
+        kb = _ease((t - B_LIFT) / float(B_BLACK - B_LIFT)) if t > B_LIFT else 0.0
+        kw = _ease((t - B_BLACK) / float(B_WHITE - B_BLACK)) if t > B_BLACK else 0.0
+        # Convergence : les trous foncent sur le héros entre CONVERGE et BOOM.
+        if B_CONVERGE < t <= B_BOOM:
+            rush = _ease((t - B_CONVERGE) / float(B_BOOM - B_CONVERGE))
+        else:
+            rush = 1.0 if t > B_BOOM else 0.0
+        bpos = (int(black[0] + (px - black[0]) * rush), int(black[1] + (py - black[1]) * rush))
+        wpos = (int(white[0] + (px - white[0]) * rush), int(white[1] + (py - white[1]) * rush))
+
+        # ============ 1) FX en espace-monde (capturés par le zoom) ============
+        # Lueur de charge dans les mains d'Aegis (éveil → arrachage).
+        if B_EYES < t <= B_LIFT:
+            cg = _ease((t - B_EYES) / float(B_GRAB - B_EYES)) if t <= B_GRAB else 1.0
+            rad = int(14 + 10 * cg + 4 * math.sin(fr * 0.4))
+            hs = pygame.Surface((rad * 2 + 6, rad * 2 + 6), pygame.SRCALPHA)
+            pygame.draw.circle(hs, (235, 60, 180, int(150 * cg)), (rad + 3, rad + 3), rad)
+            pygame.draw.circle(hs, (255, 210, 245, int(180 * cg)), (rad + 3, rad + 3), max(2, rad // 2))
+            for sgn in (-1, 1):
+                scr.blit(hs, (bx + sgn * hox - rad - 3, by + hoy - rad - 3),
+                         special_flags=pygame.BLEND_RGBA_ADD)
+
+        # Liens télékinésiques : les mains d'Aegis tiennent le héros en l'air.
+        if t > B_GRAB - 30:
+            grip = min(1.0, (t - (B_GRAB - 30)) / 50.0)
+            for sgn in (-1, 1):
+                hx = bx + sgn * hox; hy = by + hoy
+                perp = math.atan2(py - hy, px - hx) + math.pi / 2
+                pts = [(hx, hy)]
+                for sgi in range(1, 9):
+                    f = sgi / 9.0
+                    wob = math.sin(fr * 0.25 + sgi * 1.3 + sgn) * 7 * (1 - abs(f - 0.5) * 2)
+                    nx = hx + (px - hx) * f; ny = hy + (py - hy) * f
+                    pts.append((nx + math.cos(perp) * wob, ny + math.sin(perp) * wob))
+                pts.append((px, py))
+                pygame.draw.lines(scr, (235, 40, 165), False, pts, max(2, int(4 * grip)))
+                pygame.draw.lines(scr, (255, 180, 235), False, pts, max(1, int(2 * grip)))
+            gr = 52
+            gs = pygame.Surface((gr * 2 + 8, gr * 2 + 8), pygame.SRCALPHA)
+            pygame.draw.circle(gs, (235, 40, 165, int(110 * grip)), (gr + 4, gr + 4), gr, 4)
+            pygame.draw.circle(gs, (255, 150, 225, int(70 * grip)), (gr + 4, gr + 4), gr - 8, 2)
+            scr.blit(gs, (px - gr - 4, py - gr - 4), special_flags=pygame.BLEND_RGBA_ADD)
+
+        # Yeux-étoiles ROUGES d'Aegis (allumage progressif dès le tout début).
+        if t > 4:
+            eg = min(1.0, t / 60.0)
+            er = (11 + 5 * math.sin(fr * 0.3)) * eg
+            for sgn in (-1, 1):
+                self._blit_star(scr, bx + sgn * eyo, by - eyo, er * 2.4, er * 0.95,
+                                (255, 30, 30), glow=(255, 90, 60), a=int(240 * eg),
+                                rot=fr * 0.05)
+
+        # Télégraphe d'implosion AVANT chaque trou (anneau qui se referme).
+        def _implosion_tell(cxp, cyp, t0, t1, col):
+            if t0 < t < t1:
+                u = (t - t0) / float(t1 - t0)
+                rr = int(150 * (1 - u)) + 30
+                aa = int(160 * (1 - abs(u - 0.5) * 2))
+                if aa <= 0 or rr <= 0: return
+                ts2 = pygame.Surface((rr * 2 + 8, rr * 2 + 8), pygame.SRCALPHA)
+                pygame.draw.circle(ts2, (*col, max(0, aa)), (rr + 4, rr + 4), rr, 3)
+                scr.blit(ts2, (cxp - rr - 4, cyp - rr - 4), special_flags=pygame.BLEND_RGBA_ADD)
+        _implosion_tell(black[0], black[1], B_LIFT, B_BLACK, (210, 40, 150))
+        _implosion_tell(white[0], white[1], B_BLACK, B_WHITE, (255, 250, 235))
+
+        # Trou noir (droite) puis trou blanc (gauche) — grossissent puis foncent.
+        if kb > 0:
+            self._blit_black_hole(scr, bpos[0], bpos[1], int(98 * kb), fr)
+        if kw > 0:
+            self._blit_white_hole(scr, wpos[0], wpos[1], int(98 * kw), fr)
+
+        # Plateformes CONJURÉES par Aegis (surfaces d'impact, façon Sans).
+        if boss._nem_slabs and t < B_BOOM + 30:
+            sl_fade = max(0.0, 1.0 - (t - B_BOOM) / 30.0) if t >= B_BOOM else 1.0
+            for (scx, scy, sw, sh, sbirth, shit) in boss._nem_slabs:
+                ap = min(1.0, (t - sbirth) / 8.0)
+                if ap <= 0: continue
+                w = int(sw * ap * sl_fade); h = int(sh * sl_fade)
+                if w < 4 or h < 2: continue
+                rx = int(scx - cam[0] - w / 2); ry = int(scy - cam[1] - h / 2)
+                pygame.draw.rect(scr, (24, 4, 18), (rx, ry, w, h), border_radius=5)
+                pygame.draw.rect(scr, (235, 40, 165), (rx, ry, w, h), 3, border_radius=5)
+                pygame.draw.line(scr, (255, 150, 225), (rx + 5, ry + 2), (rx + w - 5, ry + 2), 2)
+                if shit >= 0:                                   # fissures de fracas
+                    cxm = rx + w // 2; cym = ry + h // 2
+                    for ddx in (-1, 1):
+                        pygame.draw.line(scr, (255, 210, 245), (cxm, cym),
+                                         (cxm + ddx * w // 3, ry - 5), 2)
+                        pygame.draw.line(scr, (255, 210, 245), (cxm, cym),
+                                         (cxm + ddx * w // 4, ry + h + 5), 2)
+
+        # PICS du SOL (ACT IV) — jaillissent UNIQUEMENT du sol, pointe vers le haut.
+        if boss._nem_spikes and t < B_BOOM + 30:
+            sp_fade = max(0.0, 1.0 - (t - B_BOOM) / 30.0) if t >= B_BOOM else 1.0
+            for (sbx, sby, sang, slen, sbirth) in boss._nem_spikes:
+                grow = min(1.0, (t - sbirth) / 9.0)
+                L = slen * grow * sp_fade
+                if L < 2: continue
+                ang = math.radians(sang); perp = ang + math.pi / 2
+                hw = L * 0.22
+                bxs = sbx - cam[0]; bys = sby - cam[1]
+                tip = (bxs + math.cos(ang) * L, bys + math.sin(ang) * L)
+                b1 = (bxs + math.cos(perp) * hw, bys + math.sin(perp) * hw)
+                b2 = (bxs - math.cos(perp) * hw, bys - math.sin(perp) * hw)
+                pygame.draw.polygon(scr, (38, 4, 24), [b1, b2, tip])
+                pygame.draw.polygon(scr, (235, 40, 165), [b1, b2, tip], 2)
+                pygame.draw.line(scr, (255, 150, 225),
+                                 ((b1[0] + b2[0]) / 2, (b1[1] + b2[1]) / 2), tip, 2)
+
+        # IMPACT BRUTAL : éclat radial blanc + anneau de choc (façon Sans).
+        ii = t - boss._nem_impact_t
+        if 0 <= ii < 12:
+            ix = boss._nem_impact_xy[0] - cam[0]; iy = boss._nem_impact_xy[1] - cam[1]
+            kf2 = 1 - ii / 12.0
+            isurf = pygame.Surface((W, H), pygame.SRCALPHA)
+            for ai in range(12):
+                a = ai * math.tau / 12 + boss._nem_impact_t * 0.7
+                L = 36 + 150 * (1 - kf2)
+                pygame.draw.line(isurf, (255, 255, 255, max(0, int(220 * kf2))),
+                                 (ix, iy), (ix + math.cos(a) * L, iy + math.sin(a) * L),
+                                 max(2, int(6 * kf2)))
+            pygame.draw.circle(isurf, (255, 200, 240, max(0, int(170 * kf2))),
+                               (int(ix), int(iy)), int(24 + 110 * (1 - kf2)), max(2, int(6 * kf2)))
+            scr.blit(isurf, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+
+        # ── LASERS : charge (windup) puis 4 faisceaux imposants ──
+        laser_dirs = [i * math.tau / 4 + 0.4 + t * 0.003 for i in range(4)]
+        # (a) Windup : réticules + rais de visée qui se chargent.
+        if B_CHARGE < t <= B_LASER:
+            cu = _ease((t - B_CHARGE) / float(B_LASER - B_CHARGE))
+            cs = pygame.Surface((W, H), pygame.SRCALPHA)
+            for a in laser_dirs:
+                sx = int(px + math.cos(a) * 380); sy = int(py + math.sin(a) * 380)
+                pygame.draw.line(cs, (255, 120, 220, int(160 * cu)), (sx, sy), (px, py),
+                                 max(1, int(1 + 3 * cu)))
+                nr = int(8 + 18 * cu + 3 * math.sin(fr * 0.6))
+                pygame.draw.circle(cs, (255, 90, 210, int(170 * cu)), (sx, sy), nr)
+                pygame.draw.circle(cs, (255, 235, 250, int(220 * cu)), (sx, sy), max(2, nr // 2))
+            scr.blit(cs, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+        # (b) SPAM de lasers (ACT III) : salves successives, de + en + nombreuses.
+        if B_LASER < t <= B_SLAM:
+            prog = (t - B_LASER) / float(B_SLAM - B_LASER)
+            fire = min(1.0, (t - B_LASER) / 16.0)
+            fade = max(0.0, (B_SLAM - t) / 26.0) if t > B_SLAM - 26 else 1.0
+            amp = fire * fade
+            n = 4 + 2 * min(2, int(prog * 3))                # 4 → 6 → 8 faisceaux
+            vp = 26                                           # période d'une salve
+            ph = (t - B_LASER) % vp
+            volley = 1.0 - ph / float(vp)                     # 1 juste après le tir → 0
+            flash = max(0.0, 1.0 - ph / 7.0)                  # éclair bref au tir
+            base = 0.4 + t * 0.018                            # rotation frénétique
+            ls = pygame.Surface((W, H), pygame.SRCALPHA)
+            for i in range(n):
+                a = base + i * math.tau / n
+                sx = px + math.cos(a) * 1100; sy = py + math.sin(a) * 1100
+                pulse = 1.0 + 0.22 * math.sin(fr * 0.5 + i)
+                wide = max(6, int((24 + 14 * volley) * amp * pulse))
+                mid = max(3, int((13 + 6 * volley) * amp)); core = max(1, int(6 * amp))
+                pygame.draw.line(ls, (190, 30, 150, int(80 * amp)), (sx, sy), (px, py), wide)
+                pygame.draw.line(ls, (255, 80, 210, int(160 * amp)), (sx, sy), (px, py), mid)
+                pygame.draw.line(ls, (255, 240, 252, int(225 * amp)), (sx, sy), (px, py), core)
+            br = (44 + 30 * volley) * amp                     # bloom pulsé par salve
+            pygame.draw.circle(ls, (255, 120, 225, int(150 * amp)), (px, py), max(8, int(br)))
+            pygame.draw.circle(ls, (255, 250, 255, int(210 * amp)), (px, py), max(4, int(br * 0.5)))
+            scr.blit(ls, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+            if flash > 0 and amp > 0:                         # éclair plein écran au tir
+                fla = pygame.Surface((W, H), pygame.SRCALPHA)
+                fla.fill((255, 120, 220, int(40 * flash * amp)))
+                scr.blit(fla, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+
+        # Noyau de broyage : incandescence qui enfle quand les trous se rejoignent.
+        if B_CONVERGE < t <= B_BOOM:
+            cr = int(24 + 130 * rush)
+            cs2 = pygame.Surface((cr * 2 + 8, cr * 2 + 8), pygame.SRCALPHA)
+            pygame.draw.circle(cs2, (255, 255, 255, int(210 * rush)), (cr + 4, cr + 4), cr)
+            pygame.draw.circle(cs2, (235, 40, 165, int(160 * rush)), (cr + 4, cr + 4), cr, 6)
+            scr.blit(cs2, (px - cr - 4, py - cr - 4), special_flags=pygame.BLEND_RGBA_ADD)
+
+        # Ondes de choc de la détonation (déflagration en anneaux).
+        if B_BOOM <= t < B_BOOM + 110:
+            for k in range(3):
+                d = (t - B_BOOM) - k * 12
+                if d <= 0: continue
+                rr = int(d * 9); aa = max(0, int(200 - d * 2))
+                if aa <= 0 or rr <= 0: continue
+                col = (255, 255, 255) if k == 0 else ((235, 40, 165) if k == 1 else (120, 12, 150))
+                sw = pygame.Surface((rr * 2 + 10, rr * 2 + 10), pygame.SRCALPHA)
+                pygame.draw.circle(sw, (*col, aa), (rr + 5, rr + 5), rr, max(2, 8 - k * 2))
+                scr.blit(sw, (px - rr - 5, py - rr - 5), special_flags=pygame.BLEND_RGBA_ADD)
+
+        # ============ 2) ZOOM dynamique (keyframes lissées) ============
+        # Chaque keyframe = (frame, focus_x, focus_y, zoom). Interpolation
+        # smootherstep entre keyframes → pas de saccade aux jointures.
+        eyes_pt = (bx, by - 26)
+        grab_pt = ((bx + px) / 2, (by + py) / 2 + 8)
+        hero_pt = (px, py)
+        mid_pt = ((bx + px) / 2, (by + py) / 2 + 4)
+        kf = [
+            (0,          eyes_pt[0], eyes_pt[1], 1.00),
+            (B_EYES,     eyes_pt[0], eyes_pt[1], 1.55),
+            (B_GRAB,     grab_pt[0], grab_pt[1], 2.00),
+            (B_LIFT,     hero_pt[0], hero_pt[1], 2.15),
+            (B_BLACK,    black[0],   black[1],   2.45),
+            (B_WHITE,    white[0],   white[1],   2.40),   # swoosh droite→gauche
+            (B_FACE,     mid_pt[0],  mid_pt[1],  2.10),
+            (B_TAUNT,    hero_pt[0], hero_pt[1], 1.95),
+            (B_CHARGE,   hero_pt[0], hero_pt[1], 1.92),
+            (B_LASER,    hero_pt[0], hero_pt[1], 1.85),
+            (B_SLAM,     hero_pt[0], hero_pt[1], 1.55),   # suit le pantin (large)
+            (B_EXHAUST,  hero_pt[0], hero_pt[1], 1.60),
+            (B_CONVERGE, hero_pt[0], hero_pt[1], 1.95),
+            (B_BOOM,     hero_pt[0], hero_pt[1], 2.65),
+            (T,          hero_pt[0], hero_pt[1], 1.00),
+        ]
+        fx, fy, zoom = hero_pt[0], hero_pt[1], 1.0
+        for i in range(len(kf) - 1):
+            t0, fx0, fy0, z0 = kf[i]; t1, fx1, fy1, z1 = kf[i + 1]
+            if t0 <= t <= t1:
+                e = _ease((t - t0) / float(max(1, t1 - t0)))
+                fx = fx0 + (fx1 - fx0) * e
+                fy = fy0 + (fy1 - fy0) * e
+                zoom = z0 + (z1 - z0) * e
+                break
+
+        si = t - boss._nem_impact_t                     # secousse d'impact du pantin
+        if 0 <= si < 16:
+            amp = 34 * (1 - si / 16.0)                  # cogne fort (façon Sans)
+            fx += random.uniform(-amp, amp); fy += random.uniform(-amp, amp)
+            if si < 8:                                  # coup de zoom sec à l'impact
+                zoom *= 1.0 + 0.13 * (1 - si / 8.0)
+        if B_CONVERGE < t < B_BOOM + 30:                # secousse de détonation
+            amp = 12 * max(rush, 0.4)
+            fx += random.uniform(-amp, amp); fy += random.uniform(-amp, amp)
+
+        if zoom > 1.01:
+            scaled_w = max(2, int(W / zoom)); scaled_h = max(2, int(H / zoom))
+            src_x = max(0, min(W - scaled_w, int(fx) - scaled_w // 2))
+            src_y = max(0, min(H - scaled_h, int(fy) - scaled_h // 2))
+            sub = scr.subsurface(pygame.Rect(src_x, src_y, scaled_w, scaled_h))
+            scr.blit(pygame.transform.scale(sub.copy(), (W, H)), (0, 0))
+
+        # ============ 3) Surcouches plein écran (non zoomées) =================
+        bar_max = 70
+        if t < 30:
+            bar_h = int(bar_max * t / 30)
+        elif t > T - 50:
+            bar_h = int(bar_max * max(0, T - t) / 50)
+        else:
+            bar_h = bar_max
+        if bar_h > 0:
+            for yb in (0, H - bar_h):
+                bar = pygame.Surface((W, bar_h), pygame.SRCALPHA)
+                bar.fill((4, 0, 6, 240))
+                ly = bar_h - 1 if yb == 0 else 0
+                pygame.draw.line(bar, (200, 20, 40), (0, ly), (W, ly), 2)
+                scr.blit(bar, (0, yb))
+
+        if B_BLACK < t <= B_WHITE:                      # stries de vitesse (swoosh)
+            sw_a = int(160 * (1 - abs((t - B_BLACK) / float(B_WHITE - B_BLACK) - 0.5) * 2))
+            if sw_a > 0:
+                ss = pygame.Surface((W, H), pygame.SRCALPHA)
+                for k in range(24):
+                    yy = (k * 33 + fr * 46) % H
+                    pygame.draw.line(ss, (255, 255, 255, max(0, sw_a)), (0, yy), (W, yy), 2)
+                scr.blit(ss, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+
+        # Vignette rouge — se renforce pendant la charge/le broyage.
+        env = (min(1.0, t / 30.0) if t < 30
+               else (max(0.0, (T - t) / 50.0) if t > T - 50 else 1.0))
+        vig = 70
+        if B_CHARGE < t < B_BOOM:
+            vig = 70 + int(60 * min(1.0, (t - B_CHARGE) / float(B_BOOM - B_CHARGE)))
+        vg = pygame.Surface((W, H), pygame.SRCALPHA)
+        pygame.draw.rect(vg, (120, 0, 20, max(0, int(vig * env))), (0, 0, W, H), 120)
+        scr.blit(vg, (0, 0))
+
+        if t < B_LIFT and bar_h > 16:                   # titre « NÉMÉSIS »
+            if t < 18: ta = int(255 * t / 18)
+            elif t > B_GRAB: ta = max(0, 255 - int((t - B_GRAB) * 1.6))
+            else: ta = 255
+            if ta > 0:
+                nm = self.font_announce.render("NÉMÉSIS", True, (255, 60, 60))
+                sh2 = self.font_announce.render("NÉMÉSIS", True, (40, 0, 0))
+                nm.set_alpha(ta); sh2.set_alpha(ta)
+                rr = nm.get_rect(center=(W // 2, bar_max // 2 + 4))
+                scr.blit(sh2, (rr.x + 3, rr.y + 3)); scr.blit(nm, rr)
+
+        if B_TAUNT - 40 < t < B_LASER + 20:             # réplique « TU ME FATIGUES »
+            qa = min(255, int(255 * min(1.0, (t - (B_TAUNT - 40)) / 26.0)))
+            if t > B_LASER - 30:
+                qa = max(0, int(255 * (1.0 - (t - (B_LASER - 30)) / 50.0)))
+            if qa > 0:
+                line = self.font_big.render("« TU ME FATIGUES. »", True, (255, 225, 235))
+                lsh = self.font_big.render("« TU ME FATIGUES. »", True, (60, 0, 20))
+                line.set_alpha(qa); lsh.set_alpha(qa)
+                lr = line.get_rect(center=(W // 2, H - bar_max // 2 - 6))
+                scr.blit(lsh, (lr.x + 2, lr.y + 2)); scr.blit(line, lr)
+
+        if B_BOOM <= t < B_BOOM + 46:                   # flash blanc d'explosion
+            fa = max(0, int(255 * (1.0 - (t - B_BOOM) / 46.0)))
+            fs = pygame.Surface((W, H)); fs.fill((255, 255, 255)); fs.set_alpha(fa)
+            scr.blit(fs, (0, 0))
+
+        # « TU ES FINIS !!! » — CRI final plein écran (détonation → fin).
+        if t >= B_BOOM:
+            sc = min(1.0, (t - B_BOOM) / 18.0)
+            txt = "TU ES FINIS !!!"
+            base_txt = self.font_big.render(txt, True, (255, 40, 40))
+            sh_txt = self.font_big.render(txt, True, (25, 0, 0))
+            target_w = (W - 80) * (0.70 + 0.30 * sc)
+            scale = (target_w / base_txt.get_width()) * (1.0 + 0.03 * math.sin(fr * 0.5))
+            bw = max(1, int(base_txt.get_width() * scale))
+            bh = max(1, int(base_txt.get_height() * scale))
+            big = pygame.transform.smoothscale(base_txt, (bw, bh))
+            bsh = pygame.transform.smoothscale(sh_txt, (bw, bh))
+            aaa = max(0, min(255, int(255 * sc)))
+            big.set_alpha(aaa); bsh.set_alpha(aaa)
+            shx = random.randint(-7, 7); shy = random.randint(-7, 7)
+            rr = big.get_rect(center=(W // 2 + shx, H // 2 + shy))
+            scr.blit(bsh, (rr.x + 5, rr.y + 5)); scr.blit(big, rr)
+
+        if t < 20:                                      # fondu d'entrée (depuis le noir)
+            fa = int(210 * (1 - t / 20.0))
+            fs = pygame.Surface((W, H)); fs.fill((0, 0, 0)); fs.set_alpha(fa)
+            scr.blit(fs, (0, 0))
+
+    def _draw_courroux(self):
+        """COURROUX (attaque phase 4, 50 s) : rupture du masque → pression →
+        déluge de météores → écrasement colossal → verdict. Rage. Brutalité. Puissance."""
+        boss = self.boss; scr = self.screen
+        t = boss.courroux_t; T = boss.courroux_dur
+        W, H = WIDTH, HEIGHT; cam = self.cam; fr = self.frame
+        (B_SHATTER, B_ROAR, B_PRESSURE, B_STORM, B_RAISE, B_SLAM, B_VERDICT) = boss._cx_beats()
+
+        def ease(u):
+            u = 0.0 if u < 0 else (1.0 if u > 1 else u)
+            return u * u * u * (u * (u * 6 - 15) + 10)
+
+        bx = int(boss.x - cam[0]); by = int(boss.y + boss.float_offset - cam[1])
+        px = int(boss._cx_gx - cam[0]); py = int(boss._cx_gy - cam[1])
+        cxs = int(boss.cx - cam[0]); floor_y = 632 - int(cam[1])
+        eyo = int(boss.vis * 0.28)
+
+        # ════════ 1) FX en espace-monde (captés par le zoom) ════════
+        # Aura de rage : halo sombre pulsant derrière Aegis (puissance brute).
+        au = 0.4 + 0.6 * ease(min(1.0, t / float(B_ROAR)))
+        ar = int(boss.vis * (1.15 + 0.08 * math.sin(fr * 0.2)) * au)
+        aus = pygame.Surface((ar * 2 + 8, ar * 2 + 8), pygame.SRCALPHA)
+        for k in range(4):
+            pygame.draw.circle(aus, (150, 16, 96, max(0, int(40 - k * 8))),
+                               (ar + 4, ar + 4), int(ar * (1 - k * 0.16)))
+        scr.blit(aus, (bx - ar - 4, by - ar - 4), special_flags=pygame.BLEND_RGBA_ADD)
+
+        # Fissures du masque AVANT la rupture (lézardes dorées sur le visage).
+        if t < B_SHATTER:
+            ck = ease(t / float(B_SHATTER))
+            for i in range(6):
+                a0 = -math.pi / 2 + (i - 2.5) * 0.5
+                x0 = bx + math.cos(a0) * eyo * 0.4
+                y0 = by - eyo
+                L = (16 + 60 * ck)
+                pygame.draw.line(scr, (255, 226, 150),
+                                 (int(x0), int(y0)),
+                                 (int(x0 + math.cos(a0) * L), int(y0 + math.sin(a0) * L)),
+                                 max(1, int(1 + 2 * ck)))
+
+        # Yeux-étoiles ROUGES : la vraie face, ignée de rage (après la rupture).
+        if t >= B_SHATTER:
+            eg = min(1.0, (t - B_SHATTER) / 50.0)
+            er = (12 + 6 * math.sin(fr * 0.3)) * eg
+            for sgn in (-1, 1):
+                self._blit_star(scr, bx + sgn * eyo, by - eyo, er * 2.5, er * 0.95,
+                                (255, 26, 26), glow=(255, 90, 60), a=int(245 * eg), rot=fr * 0.05)
+
+        # ACT II — PRESSION : anneaux gravitationnels qui se resserrent + plaque-sol.
+        if B_PRESSURE <= t < B_STORM:
+            pu = (t - B_PRESSURE) / float(B_STORM - B_PRESSURE)
+            ps = pygame.Surface((W, H), pygame.SRCALPHA)
+            for k in range(5):
+                rr = int(120 + 360 * ((k / 5.0 + fr * 0.01) % 1.0))
+                aa = max(0, int(120 * (1 - rr / 480.0)))
+                pygame.draw.circle(ps, (180, 30, 130, aa), (bx, by), rr, 2)
+            # onde de plaquage au sol autour du héros
+            pygame.draw.line(ps, (200, 40, 140, 120), (0, floor_y), (W, floor_y), 2)
+            scr.blit(ps, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+
+        # ACT III + IV — LA MÉTÉORITE colossale : se forge haut dans le ciel (III),
+        # puis Aegis l'ABAT sur le héros traîné au centre (IV).
+        if B_STORM <= t < B_SLAM:
+            grow = ease(min(1.0, (t - B_STORM) / float(B_RAISE - B_STORM)))
+            R = int(46 + 134 * grow)
+            if t < B_RAISE:
+                my = 150
+            else:
+                u = ease((t - B_RAISE) / float(B_SLAM - B_RAISE))
+                my = int(150 + (floor_y - 150) * (u * u))     # chute accélérée
+            # télégraphe d'impact au sol (centre = là où le héros est cloué)
+            tgr = R + 24
+            tg_a = max(0, min(255, int(130 + 90 * math.sin(fr * 0.25))))
+            tgs = pygame.Surface((tgr * 2 + 8, tgr * 2 + 8), pygame.SRCALPHA)
+            pygame.draw.circle(tgs, (255, 40, 60, tg_a), (tgr + 4, tgr + 4), tgr, 4)
+            pygame.draw.circle(tgs, (255, 100, 120, 90), (tgr + 4, tgr + 4), int(tgr * 0.62), 2)
+            scr.blit(tgs, (cxs - tgr - 4, floor_y - tgr - 4), special_flags=pygame.BLEND_RGBA_ADD)
+            # traînée de feu pendant la chute
+            if t >= B_RAISE:
+                for k in range(1, 8):
+                    ty = my - k * 26
+                    if ty < -40: break
+                    rr = max(2, int(R * (1 - k * 0.12)))
+                    ts = pygame.Surface((rr * 2 + 4, rr * 2 + 4), pygame.SRCALPHA)
+                    pygame.draw.circle(ts, (255, 120, 50, max(0, 130 - k * 18)), (rr + 2, rr + 2), rr)
+                    scr.blit(ts, (cxs - rr - 2, ty - rr - 2), special_flags=pygame.BLEND_RGBA_ADD)
+            # corps de la météorite : halo de feu + roche sombre + rim incandescent crénelé
+            ms = pygame.Surface((R * 4, R * 4), pygame.SRCALPHA); c = R * 2
+            for k in range(5):
+                pygame.draw.circle(ms, (255, 110, 40, max(0, 48 - k * 9)), (c, c), int(R * (1.55 - k * 0.16)))
+            for k in range(5):
+                pygame.draw.circle(ms, (38, 12, 16) if k == 0 else (74, 26, 30), (c, c), int(R * (1.0 - k * 0.16)))
+            gl = max(0, min(255, int(175 + 70 * math.sin(fr * 0.3))))
+            pygame.draw.circle(ms, (255, 150, 70, gl), (c, c), R, 4)
+            for i in range(12):
+                a = i * math.tau / 12 + fr * 0.02
+                pygame.draw.line(ms, (110, 40, 36),
+                                 (c + int(math.cos(a) * R * 0.82), c + int(math.sin(a) * R * 0.82)),
+                                 (c + int(math.cos(a) * R * 1.06), c + int(math.sin(a) * R * 1.06)), 3)
+            scr.blit(ms, (cxs - c, int(my) - c))
+            # rais de charge convergents pendant la forge (acte III)
+            if t < B_RAISE:
+                for i in range(10):
+                    a = i * math.tau / 10 + fr * 0.04
+                    rr = R + 70
+                    pygame.draw.line(scr, (235, 110, 60),
+                                     (cxs + int(math.cos(a) * rr), int(my) + int(math.sin(a) * rr)),
+                                     (cxs + int(math.cos(a) * (R + 10)), int(my) + int(math.sin(a) * (R + 10))), 2)
+
+        # Détonation de l'écrasement : ondes de choc au sol.
+        if B_SLAM <= t < B_SLAM + 120:
+            for k in range(4):
+                d = (t - B_SLAM) - k * 11
+                if d <= 0: continue
+                rr = int(d * 12); aa = max(0, int(220 - d * 2))
+                if aa <= 0 or rr <= 0: continue
+                col = (255, 255, 255) if k == 0 else ((235, 40, 165) if k % 2 else (120, 12, 150))
+                sw = pygame.Surface((rr * 2 + 10, rr * 2 + 10), pygame.SRCALPHA)
+                pygame.draw.circle(sw, (*col, aa), (rr + 5, rr + 5), rr, max(2, 9 - k * 2))
+                scr.blit(sw, (cxs - rr - 5, floor_y - rr - 5), special_flags=pygame.BLEND_RGBA_ADD)
+
+        # ════════ 2) ZOOM dynamique (keyframes — focus surtout sur le DIEU) ════════
+        kf = [
+            (0,          bx, by - int(boss.vis * 0.42), 2.20),
+            (B_SHATTER,  bx, by - int(boss.vis * 0.42), 2.20),
+            (B_ROAR,     bx, by, 1.75),
+            (B_PRESSURE, bx, by, 1.62),
+            (B_STORM,    cxs, 300, 1.12),     # large + haut : la météorite se forge
+            (B_RAISE,    cxs, 300, 1.12),
+            (B_SLAM,     cxs, 470, 1.62),     # suit la chute jusqu'à l'impact (héros au centre)
+            (B_SLAM + 1, cxs, 480, 1.95),     # coup de zoom sec à l'impact
+            (B_VERDICT,  bx, by, 1.45),
+            (T,          bx, by, 1.00),       # finit au cadrage gameplay (pas de pop)
+        ]
+        fx, fy, zoom = bx, by, 1.0
+        for i in range(len(kf) - 1):
+            t0, fx0, fy0, z0 = kf[i]; t1, fx1, fy1, z1 = kf[i + 1]
+            if t0 <= t <= t1:
+                e = ease((t - t0) / float(max(1, t1 - t0)))
+                fx = fx0 + (fx1 - fx0) * e; fy = fy0 + (fy1 - fy0) * e
+                zoom = z0 + (z1 - z0) * e; break
+
+        # Secousse : rumble par acte + montée pendant la chute + pic à l'impact.
+        shk = 0.0
+        if B_PRESSURE <= t < B_STORM:   shk = 2.5
+        elif B_STORM <= t < B_RAISE:    shk = 3.0
+        elif B_RAISE <= t < B_SLAM:     shk = 3.0 + 9.0 * ((t - B_RAISE) / float(B_SLAM - B_RAISE))
+        ii = t - boss._cx_impact_t
+        if 0 <= ii < 18:
+            shk = max(shk, boss._cx_impact_amp * (1 - ii / 18.0))
+        if shk > 0:
+            fx += random.uniform(-shk, shk); fy += random.uniform(-shk, shk)
+
+        if zoom > 1.01:
+            sw2 = max(2, int(W / zoom)); sh2 = max(2, int(H / zoom))
+            sx = max(0, min(W - sw2, int(fx) - sw2 // 2)); sy = max(0, min(H - sh2, int(fy) - sh2 // 2))
+            sub = scr.subsurface(pygame.Rect(sx, sy, sw2, sh2))
+            scr.blit(pygame.transform.scale(sub.copy(), (W, H)), (0, 0))
+
+        # ════════ 3) Surcouches plein écran ════════
+        bar_max = 74
+        if t < 30: bar_h = int(bar_max * t / 30)
+        elif t > T - 50: bar_h = int(bar_max * max(0, T - t) / 50)
+        else: bar_h = bar_max
+        if bar_h > 0:
+            for yb in (0, H - bar_h):
+                bar = pygame.Surface((W, bar_h), pygame.SRCALPHA); bar.fill((6, 0, 4, 240))
+                ly = bar_h - 1 if yb == 0 else 0
+                pygame.draw.line(bar, (200, 20, 40), (0, ly), (W, ly), 2)
+                scr.blit(bar, (0, yb))
+        # vignette rouge — s'intensifie jusqu'à l'écrasement.
+        env = (min(1.0, t / 30.0) if t < 30 else (max(0.0, (T - t) / 50.0) if t > T - 50 else 1.0))
+        vig = 80 + int(70 * ease(min(1.0, t / float(B_SLAM))))
+        vg = pygame.Surface((W, H), pygame.SRCALPHA)
+        pygame.draw.rect(vg, (130, 0, 24, max(0, int(vig * env))), (0, 0, W, H), 120)
+        scr.blit(vg, (0, 0))
+
+        def _line(txt, t0, t1, font, y):
+            if not (t0 <= t < t1): return
+            a = 255
+            if t < t0 + 20: a = int(255 * (t - t0) / 20)
+            elif t > t1 - 25: a = int(255 * (t1 - t) / 25)
+            a = max(0, min(255, a))
+            if a <= 0: return
+            s = font.render(txt, True, (255, 222, 232)); sh = font.render(txt, True, (54, 0, 16))
+            s.set_alpha(a); sh.set_alpha(a)
+            r = s.get_rect(center=(W // 2, y))
+            scr.blit(sh, (r.x + 2, r.y + 2)); scr.blit(s, r)
+
+        # Titre « COURROUX » (claqué à la rupture, se dissipe avant la pression).
+        if B_SHATTER - 10 <= t < B_PRESSURE:
+            ta = min(255, int((t - (B_SHATTER - 10)) * 12))
+            if t > B_PRESSURE - 40: ta = max(0, int(255 * (B_PRESSURE - t) / 40.0))
+            if ta > 0:
+                nm = self.font_announce.render("COURROUX", True, (255, 50, 50))
+                sh3 = self.font_announce.render("COURROUX", True, (40, 0, 0))
+                nm.set_alpha(ta); sh3.set_alpha(ta)
+                rr = nm.get_rect(center=(W // 2, bar_max // 2 + 6))
+                scr.blit(sh3, (rr.x + 3, rr.y + 3)); scr.blit(nm, rr)
+
+        # Répliques de rage / mépris / puissance.
+        yb_txt = H - bar_max // 2 - 8
+        _line("ASSEZ.", B_ROAR - 6, B_PRESSURE - 10, self.font_big, yb_txt)
+        _line("À genoux. Au CENTRE de ma colère.", B_PRESSURE + 40, B_STORM - 20, self.font_med, yb_txt)
+        _line("Le ciel va te TOMBER dessus.", B_STORM + 30, B_RAISE - 20, self.font_med, yb_txt)
+        _line("VOIS MA PUISSANCE.", B_RAISE + 30, B_SLAM - 10, self.font_big, yb_txt)
+        _line("Rampe. Tu n'étais qu'un divertissement.", B_VERDICT + 20, T - 25, self.font_med, yb_txt)
+
+        # White-out de l'écrasement.
+        if B_SLAM <= t < B_SLAM + 46:
+            fa = max(0, int(255 * (1 - (t - B_SLAM) / 46.0)))
+            fs = pygame.Surface((W, H)); fs.fill((255, 255, 255)); fs.set_alpha(fa)
+            scr.blit(fs, (0, 0))
+        if t < 20:                                      # fondu d'entrée
+            fa = int(210 * (1 - t / 20.0))
+            fo = pygame.Surface((W, H)); fo.fill((0, 0, 0)); fo.set_alpha(fa)
+            scr.blit(fo, (0, 0))
 
     def _draw_dream_warning(self):
         """Fissures à l'écran quand le joueur approche la limite du rêve (20 sec)."""
@@ -5824,6 +8840,13 @@ class Game:
         if self.boss.last_resort_active:
             pulse     = abs(math.sin(self.frame * 0.18))
             phase_col = (int(220 + 35 * pulse), int(20 * (1 - pulse)), 15)
+        elif isinstance(self.boss, AegisBoss):
+            # Palette propre à Aegis : se corrompt phase après phase (or → magenta → vide)
+            phase_col = {
+                1: _AEGIS_COL_LIGHT, 2: _AEGIS_COL_LIGHT, 3: _AEGIS_COL_MIXED,
+                4: _AEGIS_COL_DARK,  5: _AEGIS_COL_DARK2,  6: (200, 30, 150),
+                7: _AEGIS_COL_VOID,
+            }.get(self.boss.phase, _AEGIS_COL_DARK)
         elif self.boss.phase == 5:
             phase_col = (210, 20, 55) if self.boss.final_form else (175, 45, 95)
         elif self.boss.phase == 4: phase_col = (255, 100, 180)
@@ -5865,7 +8888,13 @@ class Game:
 
         _bname = getattr(self.boss, 'display_name', 'LA LUNE')
         _bcount = getattr(self.boss, 'phase_count', 5)
-        name = self.font_sm.render(f"{_bname}  —  Phase {self.boss.phase} / {_bcount}", True, Pal.UI)
+        if isinstance(self.boss, AegisBoss):
+            # 2 phases VISIBLES : I (avant COURROUX) / II (après). Le niveau
+            # interne (forme + attaques) morphe en continu avec les PV, sans bannière.
+            _act = 1 if self.boss.phase <= 3 else 2
+            name = self.font_sm.render(f"{_bname}  —  Phase {_act} / 2", True, Pal.UI)
+        else:
+            name = self.font_sm.render(f"{_bname}  —  Phase {self.boss.phase} / {_bcount}", True, Pal.UI)
         self.screen.blit(name, name.get_rect(midbottom=(WIDTH // 2, bar_screen_y - 2)))
 
         # Phase 2 : dimension vulnérable (Lune uniquement)
@@ -6087,6 +9116,50 @@ class Game:
         surf = self.font_sm.render(self.subtitle_text, True, (255, 210, 240))
         surf.set_alpha(int(255 * fade))
         self.screen.blit(surf, surf.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 78)))
+
+    def draw_attack_callout(self):
+        """Nom de l'attaque spéciale d'Aegis : claque en haut de l'écran pour
+        qu'on VOIE chaque attaque divine — punch-in, maintien, fondu."""
+        if self.callout_t <= 0 or not self.callout_text:
+            return
+        t = self.callout_t / max(1, self.callout_max)
+        if t > 0.86:                      # punch-in : gros → normal + fade in
+            fade = (1.0 - t) / 0.14
+            scl  = 1.0 + (t - 0.86) / 0.14 * 0.4
+        elif t < 0.32:                    # fondu sortant
+            fade = t / 0.32
+            scl  = 1.0
+        else:
+            fade = 1.0
+            scl  = 1.0
+        fade = max(0.0, min(1.0, fade))
+        col = self.boss._form_color() if isinstance(self.boss, AegisBoss) \
+            else _AEGIS_COL_DARK2
+        cx, cy = WIDTH // 2, 152
+        txt = self.font_med.render(self.callout_text, True, (255, 244, 252))
+        if scl != 1.0:
+            txt = pygame.transform.rotozoom(txt, 0, scl)
+        txt.set_alpha(int(255 * fade))
+        tw, th = txt.get_size()
+        pad_x, pad_y = 36, 9
+        band = pygame.Surface((tw + pad_x * 2, th + pad_y * 2), pygame.SRCALPHA)
+        band.fill((12, 4, 20, int(165 * fade)))
+        pygame.draw.rect(band, (*col, int(225 * fade)), band.get_rect(),
+                         width=2, border_radius=3)
+        brect = band.get_rect(center=(cx, cy))
+        # chevrons latéraux (dessinés sur le bandeau alpha pour fondre proprement)
+        for sgn in (-1, 1):
+            ex = pad_x // 2 if sgn < 0 else band.get_width() - pad_x // 2
+            tip = ex + sgn * 7
+            pygame.draw.lines(band, (*col, int(225 * fade)), False,
+                              [(ex, pad_y), (tip, band.get_height() // 2),
+                               (ex, band.get_height() - pad_y)], 2)
+        self.screen.blit(band, brect)
+        self.screen.blit(txt, txt.get_rect(center=(cx, cy)))
+        # tag « ATTAQUE DIVINE »
+        tag = self.font_sm.render("— ATTAQUE DIVINE —", True, col)
+        tag.set_alpha(int(170 * fade))
+        self.screen.blit(tag, tag.get_rect(center=(cx, cy + th // 2 + pad_y + 13)))
 
     def draw_god_dialog(self):
         pw, ph = 340, 180
