@@ -47,21 +47,25 @@ gameplay gelé), plus la **vraie fin du jeu**.
    `_start_nemesis` / `_update_nemesis` + `Game._draw_nemesis`.
    Yeux rouges, héros soulevé, **trou noir + trou blanc**, swoosh caméra, lasers spammés,
    slam contre des pics, **énorme explosion** → héros à **1 PV**.
-4. **LA FIN DU JEU** (canonique, après la mort en phase 7) — c'est **L'ENDING**, pas un secret :
-   - **Faux-ending** (texte de mort) → une **FISSURE s'ouvre progressivement** + **2 mains
-     griffues** déchirent l'écran.
+4. **LA FIN DU JEU** (canonique, après la mort en phase 7) — c'est **L'ENDING** :
+   - **Faux-ending** (texte de mort) → la **FISSURE se forme TRÈS lentement**, puis **2 mains
+     griffues** SURGISSENT (animation de spawn) et **déchirent l'écran** (secousse).
    - **LE NÉANT** : dalle d'obsidienne + étoiles. **Dialogue** (le héros ne répond que « … »).
-   - **SURVIE** : le héros a perdu ses pouvoirs (**esquive seule**), il est **increvable**
-     (planché à 1 PV), une jauge **« ?! »** se remplit. **Pluie de MÉTÉORITES** à esquiver.
-   - Jauge pleine → **clic** → **TIME-STOP** → grande **exécution cinématique (~34 s)** :
-     caméra qui change de plan (gros plan du dieu, punch, **smash sur l'impact**, recul),
-     **belle lame de lumière**, le dieu **coupé en deux** → carte-titre **« fin »** → texte final.
-   - Méthodes : `_start_finale` / `_update_finale_cine` / `_finale_fire` (côté boss),
-     et côté `Game` : `_draw_finale_world`, `_draw_finale` (dispatch),
-     `_draw_finale_prelude` / `_dialogue` / `_survival` / `_timestop` / `_ending`,
-     `_apply_finale_cam` (caméra), `_draw_light_blade`, `_draw_meteor`, `_draw_god_halves`,
-     `_finale_activate_skill`. États : `boss.finale_active`, `boss.finale_act`
-     (`prelude → dialogue → survival → timestop → ending`).
+   - **SURVIE** : pouvoirs coupés (**esquive seule**), increvable, jauge **« ?! »** qui se
+     remplit en esquivant une **pluie de météorites**.
+   - Jauge pleine → **clic** → **EXÉCUTION (time-stop)**, réécrite : temps figé →
+     **Aegis surpris** → le héros révèle sa **VRAIE FORME** (le **sprite réel** du héros mué
+     en **Destructeur du Néant** : silhouette noire étoilée + liseré bleu, via
+     `Player._voidify` / `_draw_void`) → « **Qui es-tu ?** » / « **Je suis la fin.** » →
+     **DÉLUGE d'énergie de POINGS** (façon Susano'o, ~16 s) : escalade (de + en + de poings,
+     + rapides), **énergie de fond OFFENSIVE** (rais + onde qui brûle Aegis), **hit-stop**,
+     **fractures**, **débris**, grosses secousses → **Aegis réduit en CENDRES** (plus coupé
+     en deux) → carte « **fin** » → texte final.
+   - Méthodes : `_start_finale` / `_update_finale_cine` (côté boss) ; côté `Game` :
+     `_draw_finale_world`, `_draw_finale`, `_draw_finale_prelude` / `_dialogue` / `_survival`
+     / `_timestop` / `_ending`, `_apply_finale_cam`, `_draw_barrage` / `_draw_energy_fist`
+     (déluge de poings), `_finale_activate_skill`. Timings : constantes `_FIN_*`. États :
+     `boss.finale_active`, `boss.finale_act` (`prelude → dialogue → survival → timestop → ending`).
 5. **2 phases visibles** : `phase_count = 2`, l'UI montre « Phase I / II ».
    COURROUX = bascule phase 1→2 (~57 % PV) ; NÉMÉSIS = finisher (~14 % PV).
    Le sprite/design morphe avec les PV. Difficulté des phases 4→7 relevée.
@@ -72,7 +76,18 @@ gameplay gelé), plus la **vraie fin du jeu**.
    Coupée pour Aegis (`player.can_swap = False` dans `start_aegis_fight`, et plateformes
    rendues visibles pour éviter les plateformes-rêve mortes).
 8. Sprite d'Aegis **agrandi** ; les **noms d'attaques ne s'affichent plus** (les taunts du
-   dieu restent) ; nombreux correctifs visuels (splat-art net, dais, fissure, mains, slash…).
+   dieu restent) ; nombreux correctifs visuels (splat-art net, dais, fissure, mains…).
+9. **Menu PAUSE** : `ÉCHAP` / `P` en combat / hub / overworld → **menu pause** (Reprendre /
+   Quitter) au lieu d'être éjecté au titre ; le jeu ET la **musique se figent** (`toggle_pause`),
+   et « Quitter » **coupe la musique** (`reset_to_title`). Avant, ÉCHAP renvoyait au menu en
+   laissant tourner la musique du combat.
+10. **AUDIO** : (a) **son d'écriture** — un « blip » **généré par personnage** (voix + ou -
+    grave : Aegis grave, héros abyssal, Lune aiguë) quand un perso parle, y compris en
+    **combat** et cinématiques (`_play_text_blip` / `set_subtitle` / `_cine_voice_once`,
+    constantes `_VOICE_*`). (b) **Fix chemin d'assets** : `_asset_path()` cherche `src/assets/`
+    PUIS la racine `assets/` → **sons + musique + sprites chargent enfin depuis `src/`** (avant :
+    jeu muet + héros en placeholder quand lancé via `python src/main.py`). (c) Musique
+    `final_cinematic.mp3` sur la vraie fin + banque **`play_sfx(nom)`** câblée aux temps forts.
 
 ---
 
